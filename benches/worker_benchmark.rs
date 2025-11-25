@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use openworkers_runtime_quickjs::{HttpRequest, Script, Task, Worker};
 use std::collections::HashMap;
 use tokio::runtime::Runtime;

@@ -1,7 +1,9 @@
 use crate::compat::{RuntimeLimits, Script};
 use crate::task::{HttpRequest, HttpResponse, ResponseBody, Task};
 use bytes::Bytes;
-use rquickjs::{AsyncContext, AsyncRuntime, Function, Object, async_with, promise::Promise};
+use rquickjs::{
+    AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async, promise::Promise,
+};
 use std::collections::HashMap;
 
 /// JavaScript bindings for the worker
@@ -261,6 +263,57 @@ const RUNTIME_JS: &str = r#"
 
     globalThis.FetchEvent = FetchEvent;
 
+    // Global fetch function
+    globalThis.fetch = async function(url, options) {
+        options = options || {};
+
+        // Handle Request object
+        if (url instanceof Request) {
+            options = {
+                method: url.method,
+                headers: url.headers,
+                body: url._body,
+                ...options
+            };
+            url = url.url;
+        }
+
+        const method = (options.method || 'GET').toUpperCase();
+        const headers = {};
+
+        if (options.headers) {
+            if (options.headers instanceof Headers) {
+                options.headers.forEach((value, key) => {
+                    headers[key] = value;
+                });
+            } else {
+                Object.assign(headers, options.headers);
+            }
+        }
+
+        const body = options.body || null;
+
+        // Call native fetch
+        const result = await __native_fetch(JSON.stringify({
+            url: url,
+            method: method,
+            headers: headers,
+            body: body
+        }));
+
+        const data = JSON.parse(result);
+
+        if (data.error) {
+            throw new Error(data.error);
+        }
+
+        return new Response(data.body, {
+            status: data.status,
+            statusText: data.statusText || 'OK',
+            headers: data.headers
+        });
+    };
+
     // Dispatch fetch event
     globalThis.__dispatchFetch = async function(request) {
         const event = new FetchEvent(new Request(request.url, {
@@ -270,7 +323,8 @@ const RUNTIME_JS: &str = r#"
         }));
 
         for (const handler of globalThis.__eventListeners.fetch) {
-            handler(event);
+            // Await the handler in case it's async
+            await handler(event);
         }
 
         if (event._responded && event._response) {
@@ -280,6 +334,111 @@ const RUNTIME_JS: &str = r#"
         return new Response('No response from worker', { status: 500 });
     };
 "#;
+
+/// Native fetch implementation
+async fn native_fetch(options_json: String) -> String {
+    #[derive(serde::Deserialize)]
+    struct FetchOptions {
+        url: String,
+        method: String,
+        headers: HashMap<String, String>,
+        body: Option<String>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct FetchResult {
+        status: u16,
+        #[serde(rename = "statusText")]
+        status_text: String,
+        headers: HashMap<String, String>,
+        body: String,
+        error: Option<String>,
+    }
+
+    let options: FetchOptions = match serde_json::from_str(&options_json) {
+        Ok(o) => o,
+        Err(e) => {
+            return serde_json::to_string(&FetchResult {
+                status: 0,
+                status_text: String::new(),
+                headers: HashMap::new(),
+                body: String::new(),
+                error: Some(format!("Invalid fetch options: {}", e)),
+            })
+            .unwrap();
+        }
+    };
+
+    let client = reqwest::Client::new();
+
+    let mut request = match options.method.as_str() {
+        "GET" => client.get(&options.url),
+        "POST" => client.post(&options.url),
+        "PUT" => client.put(&options.url),
+        "DELETE" => client.delete(&options.url),
+        "PATCH" => client.patch(&options.url),
+        "HEAD" => client.head(&options.url),
+        _ => client.get(&options.url),
+    };
+
+    // Add headers
+    for (key, value) in &options.headers {
+        request = request.header(key, value);
+    }
+
+    // Add body if present
+    if let Some(body) = options.body {
+        request = request.body(body);
+    }
+
+    // Execute request
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let status_text = response
+                .status()
+                .canonical_reason()
+                .unwrap_or("OK")
+                .to_string();
+
+            // Extract headers
+            let mut headers = HashMap::new();
+            for (key, value) in response.headers() {
+                if let Ok(v) = value.to_str() {
+                    headers.insert(key.to_string(), v.to_string());
+                }
+            }
+
+            // Get body
+            match response.text().await {
+                Ok(body) => serde_json::to_string(&FetchResult {
+                    status,
+                    status_text,
+                    headers,
+                    body,
+                    error: None,
+                })
+                .unwrap(),
+                Err(e) => serde_json::to_string(&FetchResult {
+                    status: 0,
+                    status_text: String::new(),
+                    headers: HashMap::new(),
+                    body: String::new(),
+                    error: Some(format!("Failed to read response body: {}", e)),
+                })
+                .unwrap(),
+            }
+        }
+        Err(e) => serde_json::to_string(&FetchResult {
+            status: 0,
+            status_text: String::new(),
+            headers: HashMap::new(),
+            body: String::new(),
+            error: Some(format!("Fetch failed: {}", e)),
+        })
+        .unwrap(),
+    }
+}
 
 /// Worker that executes JavaScript code
 pub struct Worker {
@@ -308,6 +467,12 @@ impl Worker {
                 println!("[JS] {}", msg);
             }).map_err(|e| format!("Failed to create log function: {}", e))?;
             global.set("__native_log", log_fn).map_err(|e| format!("Failed to set __native_log: {}", e))?;
+
+            // Setup native fetch function (returns a Promise)
+            let fetch_fn = Function::new(ctx.clone(), Async(native_fetch))
+                .map_err(|e| format!("Failed to create fetch function: {}", e))?;
+            global.set("__native_fetch", fetch_fn)
+                .map_err(|e| format!("Failed to set __native_fetch: {}", e))?;
 
             // Evaluate runtime bindings
             ctx.eval::<(), _>(RUNTIME_JS)
