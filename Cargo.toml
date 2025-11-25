@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# QuickJS JavaScript engine
+rquickjs = { version = "0.9", features = ["full-async", "parallel"] }
+
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+
+[[example]]
+name = "hello_world"
+path = "examples/hello_world.rs"
