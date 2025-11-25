@@ -24,3 +24,14 @@ path = "examples/hello_world.rs"
 [[example]]
 name = "async_test"
 path = "examples/async_test.rs"
+
+[[example]]
+name = "streaming_bench"
+path = "examples/streaming_bench.rs"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "worker_benchmark"
+harness = false
