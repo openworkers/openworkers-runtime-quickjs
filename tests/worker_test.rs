@@ -59,10 +59,13 @@ async fn test_json_response() {
 
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
-    assert_eq!(
-        response.headers.get("content-type"),
-        Some(&"application/json".to_string())
-    );
+
+    let content_type = response
+        .headers
+        .iter()
+        .find(|(k, _)| k == "content-type")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(content_type, Some("application/json"));
 
     let body = response.body.as_bytes().expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(body).expect("Should be valid JSON");

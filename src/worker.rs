@@ -1,4 +1,4 @@
-use crate::compat::{RuntimeLimits, Script};
+use crate::compat::{RuntimeLimits, Script, TerminationReason};
 use crate::task::{HttpRequest, HttpResponse, ResponseBody, Task};
 use bytes::Bytes;
 use rquickjs::{
@@ -263,6 +263,21 @@ const RUNTIME_JS: &str = r#"
 
     globalThis.FetchEvent = FetchEvent;
 
+    // ScheduledEvent class
+    class ScheduledEvent {
+        constructor(scheduledTime) {
+            this.type = 'scheduled';
+            this.scheduledTime = scheduledTime;
+            this._waitUntilPromises = [];
+        }
+
+        waitUntil(promise) {
+            this._waitUntilPromises.push(promise);
+        }
+    }
+
+    globalThis.ScheduledEvent = ScheduledEvent;
+
     // Global fetch function
     globalThis.fetch = async function(url, options) {
         options = options || {};
@@ -332,6 +347,23 @@ const RUNTIME_JS: &str = r#"
         }
 
         return new Response('No response from worker', { status: 500 });
+    };
+
+    // Dispatch scheduled event
+    globalThis.__dispatchScheduled = async function(scheduledTime) {
+        const event = new ScheduledEvent(scheduledTime);
+
+        for (const handler of globalThis.__eventListeners.scheduled) {
+            // Await the handler in case it's async
+            await handler(event);
+        }
+
+        // Wait for all waitUntil promises
+        if (event._waitUntilPromises.length > 0) {
+            await Promise.all(event._waitUntilPromises);
+        }
+
+        return { success: true };
     };
 "#;
 
@@ -450,8 +482,8 @@ impl Worker {
     /// Create a new worker with the given script
     pub async fn new(
         script: Script,
+        _log_tx: Option<std::sync::mpsc::Sender<crate::compat::LogEvent>>,
         _limits: Option<RuntimeLimits>,
-        _log_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::compat::LogEvent>>,
     ) -> Result<Self, String> {
         let runtime =
             AsyncRuntime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
@@ -490,20 +522,31 @@ impl Worker {
     }
 
     /// Execute a task
-    pub async fn exec(&mut self, task: Task) -> Result<(), String> {
-        match task {
-            Task::Fetch {
-                request,
-                response_tx,
-            } => {
-                let response = self.handle_fetch(request).await?;
-                let _ = response_tx.send(response);
-                Ok(())
+    pub async fn exec(&mut self, mut task: Task) -> Result<TerminationReason, String> {
+        match &mut task {
+            Task::Fetch(init_opt) => {
+                let init = init_opt
+                    .take()
+                    .ok_or_else(|| "FetchInit already taken".to_string())?;
+                match self.handle_fetch(init.req).await {
+                    Ok(response) => {
+                        let _ = init.res_tx.send(response);
+                        Ok(TerminationReason::Success)
+                    }
+                    Err(_) => Ok(TerminationReason::Exception),
+                }
             }
-            Task::Scheduled { cron, response_tx } => {
-                let result = self.handle_scheduled(&cron).await;
-                let _ = response_tx.send(result);
-                Ok(())
+            Task::Scheduled(init_opt) => {
+                let init = init_opt
+                    .take()
+                    .ok_or_else(|| "ScheduledInit already taken".to_string())?;
+                match self.handle_scheduled(init.time).await {
+                    Ok(()) => {
+                        let _ = init.res_tx.send(());
+                        Ok(TerminationReason::Success)
+                    }
+                    Err(_) => Ok(TerminationReason::Exception),
+                }
             }
         }
     }
@@ -544,14 +587,14 @@ impl Worker {
             let status: i32 = response.get("status")
                 .map_err(|e| format!("Failed to get status: {}", e))?;
 
-            // Extract headers
-            let mut headers = HashMap::new();
+            // Extract headers as Vec<(String, String)>
+            let mut headers = Vec::new();
             if let Ok(headers_obj) = response.get::<_, Object>("headers") {
                 if let Ok(internal) = headers_obj.get::<_, Object>("_headers") {
                     for key in internal.keys::<String>() {
                         if let Ok(key) = key {
                             if let Ok(value) = internal.get::<_, String>(&key) {
-                                headers.insert(key, value);
+                                headers.push((key, value));
                             }
                         }
                     }
@@ -575,8 +618,19 @@ impl Worker {
     }
 
     /// Handle a scheduled event
-    async fn handle_scheduled(&self, _cron: &str) -> Result<(), String> {
-        // TODO: Implement scheduled event handling
-        Ok(())
+    async fn handle_scheduled(&self, time: u64) -> Result<(), String> {
+        async_with!(self.context => |ctx| {
+            let dispatch_code = format!(r#"__dispatchScheduled({})"#, time);
+
+            // Dispatch and await the scheduled event
+            let promise: Promise = ctx.eval(dispatch_code.as_bytes())
+                .map_err(|e| format!("Failed to dispatch scheduled: {}", e))?;
+
+            let _result: Object = promise.into_future().await
+                .map_err(|e| format!("Scheduled handler failed: {}", e))?;
+
+            Ok(())
+        })
+        .await
     }
 }

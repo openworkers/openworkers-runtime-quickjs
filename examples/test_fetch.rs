@@ -8,7 +8,7 @@ async fn main() {
             console.log('Handler called');
             try {
                 console.log('About to fetch');
-                const response = await fetch('https://httpbin.org/get');
+                const response = await fetch('https://httpbin.workers.rocks/get');
                 console.log('Fetch completed, status:', response.status);
                 const text = await response.text();
                 console.log('Got text, length:', text.length);

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 async fn test_fetch_basic_get() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.org/get');
+            const response = await fetch('https://httpbin.workers.rocks/get');
             const data = await response.json();
             event.respondWith(new Response(JSON.stringify({
                 status: response.status,
@@ -46,7 +46,7 @@ async fn test_fetch_basic_get() {
 async fn test_fetch_post_with_body() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.org/post', {
+            const response = await fetch('https://httpbin.workers.rocks/post', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ hello: 'world' })
@@ -91,13 +91,13 @@ async fn test_fetch_post_with_body() {
 async fn test_fetch_with_headers() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.org/headers', {
+            const response = await fetch('https://httpbin.workers.rocks/headers', {
                 headers: { 'X-Custom-Header': 'test-value' }
             });
             const data = await response.json();
             event.respondWith(new Response(JSON.stringify({
                 status: response.status,
-                customHeader: data.headers['X-Custom-Header']
+                customHeader: data.headers['x-custom-header']
             })));
         });
     "#;
@@ -134,7 +134,7 @@ async fn test_fetch_forward() {
     // Test fetch forward - direct pass-through of fetch response
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.org/get');
+            const response = await fetch('https://httpbin.workers.rocks/get');
             event.respondWith(response);
         });
     "#;
@@ -164,7 +164,7 @@ async fn test_fetch_forward() {
     let body = response.body.as_bytes().expect("Should have body");
     let body_str = String::from_utf8_lossy(body);
     assert!(
-        body_str.contains("httpbin.org"),
+        body_str.contains("httpbin.workers.rocks"),
         "Should contain httpbin response"
     );
 }
@@ -173,7 +173,7 @@ async fn test_fetch_forward() {
 async fn test_fetch_404() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.org/status/404');
+            const response = await fetch('https://httpbin.workers.rocks/status/404');
             event.respondWith(new Response(JSON.stringify({
                 status: response.status,
                 ok: response.ok
