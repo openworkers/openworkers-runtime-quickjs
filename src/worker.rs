@@ -1,10 +1,16 @@
-use crate::compat::{RuntimeLimits, Script, TerminationReason};
-use crate::task::{HttpRequest, HttpResponse, RESPONSE_STREAM_BUFFER_SIZE, ResponseBody, Task};
 use bytes::Bytes;
+use openworkers_core::{
+    HttpRequest, HttpResponse, LogSender, ResponseBody, RuntimeLimits, Script, Task,
+    TerminationReason,
+};
 use rquickjs::{
     AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async, promise::Promise,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+const RESPONSE_STREAM_BUFFER_SIZE: usize = 16;
 
 /// JavaScript bindings for the worker
 const RUNTIME_JS: &str = r#"
@@ -822,22 +828,25 @@ async fn native_fetch(options_json: String) -> String {
 
 /// Worker that executes JavaScript code
 pub struct Worker {
+    #[allow(dead_code)]
     runtime: AsyncRuntime,
     context: AsyncContext,
+    aborted: Arc<AtomicBool>,
 }
 
 impl Worker {
     /// Create a new worker with the given script
     pub async fn new(
         script: Script,
-        _log_tx: Option<std::sync::mpsc::Sender<crate::compat::LogEvent>>,
+        _log_tx: Option<LogSender>,
         _limits: Option<RuntimeLimits>,
-    ) -> Result<Self, String> {
-        let runtime =
-            AsyncRuntime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
-        let context = AsyncContext::full(&runtime)
-            .await
-            .map_err(|e| format!("Failed to create context: {}", e))?;
+    ) -> Result<Self, TerminationReason> {
+        let runtime = AsyncRuntime::new().map_err(|e| {
+            TerminationReason::InitializationError(format!("Failed to create runtime: {}", e))
+        })?;
+        let context = AsyncContext::full(&runtime).await.map_err(|e| {
+            TerminationReason::InitializationError(format!("Failed to create context: {}", e))
+        })?;
 
         // Initialize runtime bindings and evaluate script
         async_with!(context => |ctx| {
@@ -845,62 +854,70 @@ impl Worker {
             let global = ctx.globals();
             let log_fn = Function::new(ctx.clone(), |msg: String| {
                 println!("[JS] {}", msg);
-            }).map_err(|e| format!("Failed to create log function: {}", e))?;
-            global.set("__native_log", log_fn).map_err(|e| format!("Failed to set __native_log: {}", e))?;
+            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create log function: {}", e)))?;
+            global.set("__native_log", log_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __native_log: {}", e)))?;
 
             // Setup native fetch function (returns a Promise)
             let fetch_fn = Function::new(ctx.clone(), Async(native_fetch))
-                .map_err(|e| format!("Failed to create fetch function: {}", e))?;
+                .map_err(|e| TerminationReason::InitializationError(format!("Failed to create fetch function: {}", e)))?;
             global.set("__native_fetch", fetch_fn)
-                .map_err(|e| format!("Failed to set __native_fetch: {}", e))?;
+                .map_err(|e| TerminationReason::InitializationError(format!("Failed to set __native_fetch: {}", e)))?;
 
             // Evaluate runtime bindings
             ctx.eval::<(), _>(RUNTIME_JS)
-                .map_err(|e| format!("Failed to evaluate runtime JS: {}", e))?;
+                .map_err(|e| TerminationReason::InitializationError(format!("Failed to evaluate runtime JS: {}", e)))?;
 
             // Evaluate user script
             ctx.eval::<(), _>(script.code.as_str())
-                .map_err(|e| format!("Failed to evaluate user script: {}", e))?;
+                .map_err(|e| TerminationReason::Exception(format!("Script evaluation failed: {}", e)))?;
 
-            Ok::<(), String>(())
+            Ok::<(), TerminationReason>(())
         })
         .await?;
 
-        Ok(Self { runtime, context })
+        Ok(Self {
+            runtime,
+            context,
+            aborted: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Abort the worker execution
+    pub fn abort(&mut self) {
+        self.aborted.store(true, Ordering::SeqCst);
+        // QuickJS doesn't have a direct interrupt mechanism like V8,
+        // but we can check the aborted flag in our async operations
     }
 
     /// Execute a task
-    pub async fn exec(&mut self, mut task: Task) -> Result<TerminationReason, String> {
+    pub async fn exec(&mut self, mut task: Task) -> Result<(), TerminationReason> {
+        // Check if aborted before starting
+        if self.aborted.load(Ordering::SeqCst) {
+            return Err(TerminationReason::Aborted);
+        }
+
         match &mut task {
             Task::Fetch(init_opt) => {
-                let init = init_opt
-                    .take()
-                    .ok_or_else(|| "FetchInit already taken".to_string())?;
-                match self.handle_fetch(init.req).await {
-                    Ok(response) => {
-                        let _ = init.res_tx.send(response);
-                        Ok(TerminationReason::Success)
-                    }
-                    Err(_) => Ok(TerminationReason::Exception),
-                }
+                let init = init_opt.take().ok_or_else(|| {
+                    TerminationReason::Other("FetchInit already taken".to_string())
+                })?;
+                let response = self.handle_fetch(init.req).await?;
+                let _ = init.res_tx.send(response);
+                Ok(())
             }
             Task::Scheduled(init_opt) => {
-                let init = init_opt
-                    .take()
-                    .ok_or_else(|| "ScheduledInit already taken".to_string())?;
-                match self.handle_scheduled(init.time).await {
-                    Ok(()) => {
-                        let _ = init.res_tx.send(());
-                        Ok(TerminationReason::Success)
-                    }
-                    Err(_) => Ok(TerminationReason::Exception),
-                }
+                let init = init_opt.take().ok_or_else(|| {
+                    TerminationReason::Other("ScheduledInit already taken".to_string())
+                })?;
+                self.handle_scheduled(init.time).await?;
+                let _ = init.res_tx.send(());
+                Ok(())
             }
         }
     }
 
     /// Handle a fetch event
-    async fn handle_fetch(&self, request: HttpRequest) -> Result<HttpResponse, String> {
+    async fn handle_fetch(&self, request: HttpRequest) -> Result<HttpResponse, TerminationReason> {
         async_with!(self.context => |ctx| {
             // Build request object for JS
             let headers_json: String = serde_json::to_string(&request.headers)
@@ -926,14 +943,14 @@ impl Worker {
 
             // Dispatch and get response
             let promise: Promise = ctx.eval(dispatch_code.as_bytes())
-                .map_err(|e| format!("Failed to dispatch fetch: {}", e))?;
+                .map_err(|e| TerminationReason::Exception(format!("Failed to dispatch fetch: {}", e)))?;
 
             let response: Object = promise.into_future().await
-                .map_err(|e| format!("Fetch handler failed: {}", e))?;
+                .map_err(|e| TerminationReason::Exception(format!("Fetch handler failed: {}", e)))?;
 
             // Extract response properties
             let status: i32 = response.get("status")
-                .map_err(|e| format!("Failed to get status: {}", e))?;
+                .map_err(|e| TerminationReason::Exception(format!("Failed to get status: {}", e)))?;
 
             // Extract headers as Vec<(String, String)>
             let mut headers = Vec::new();
@@ -959,7 +976,7 @@ impl Worker {
                 // Set the response on globalThis temporarily for the helper to access
                 let global = ctx.globals();
                 global.set("__streamResponse", response.clone())
-                    .map_err(|e| format!("Failed to set __streamResponse: {}", e))?;
+                    .map_err(|e| TerminationReason::Exception(format!("Failed to set __streamResponse: {}", e)))?;
 
                 // Read chunks one by one
                 let read_chunk_code = r#"
@@ -980,9 +997,9 @@ impl Worker {
                 // Read all chunks into memory
                 loop {
                     let read_promise: Promise = ctx.eval(read_chunk_code.as_bytes())
-                        .map_err(|e| format!("Failed to eval chunk read: {}", e))?;
+                        .map_err(|e| TerminationReason::Exception(format!("Failed to eval chunk read: {}", e)))?;
                     let result: Object = read_promise.into_future().await
-                        .map_err(|e| format!("Failed to read chunk: {}", e))?;
+                        .map_err(|e| TerminationReason::Exception(format!("Failed to read chunk: {}", e)))?;
 
                     let done: bool = result.get("done").unwrap_or(true);
                     if done {
@@ -1029,19 +1046,37 @@ impl Worker {
     }
 
     /// Handle a scheduled event
-    async fn handle_scheduled(&self, time: u64) -> Result<(), String> {
+    async fn handle_scheduled(&self, time: u64) -> Result<(), TerminationReason> {
         async_with!(self.context => |ctx| {
             let dispatch_code = format!(r#"__dispatchScheduled({})"#, time);
 
             // Dispatch and await the scheduled event
             let promise: Promise = ctx.eval(dispatch_code.as_bytes())
-                .map_err(|e| format!("Failed to dispatch scheduled: {}", e))?;
+                .map_err(|e| TerminationReason::Exception(format!("Failed to dispatch scheduled: {}", e)))?;
 
             let _result: Object = promise.into_future().await
-                .map_err(|e| format!("Scheduled handler failed: {}", e))?;
+                .map_err(|e| TerminationReason::Exception(format!("Scheduled handler failed: {}", e)))?;
 
             Ok(())
         })
         .await
+    }
+}
+
+impl openworkers_core::Worker for Worker {
+    async fn new(
+        script: Script,
+        log_tx: Option<LogSender>,
+        limits: Option<RuntimeLimits>,
+    ) -> Result<Self, TerminationReason> {
+        Worker::new(script, log_tx, limits).await
+    }
+
+    async fn exec(&mut self, task: Task) -> Result<(), TerminationReason> {
+        Worker::exec(self, task).await
+    }
+
+    fn abort(&mut self) {
+        Worker::abort(self)
     }
 }

@@ -1,12 +1,17 @@
 [package]
 name = "openworkers-runtime-quickjs"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2024"
 
 [features]
-actix = ["dep:actix-web"]
+actix = ["dep:actix-web", "openworkers-core/actix"]
 
 [dependencies]
+
+# Common types
+# openworkers-core = { path = "../openworkers-core", features = ["testing"] }
+openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.4.0", features = ["testing"] }
+
 # QuickJS JavaScript engine
 rquickjs = { version = "0.10", features = ["full-async", "parallel"] }
 
@@ -44,5 +49,5 @@ path = "examples/streaming_bench.rs"
 criterion = { version = "0.5", features = ["async_tokio"] }
 
 [[bench]]
-name = "worker_benchmark"
+name = "generic_benchmark"
 harness = false

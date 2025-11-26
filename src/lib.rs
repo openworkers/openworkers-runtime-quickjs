@@ -1,16 +1,15 @@
-mod compat;
 pub mod runtime;
 pub mod snapshot;
-mod task;
 mod worker;
 
-pub use compat::{LogEvent, LogLevel, RuntimeLimits, Script, TerminationReason};
 pub use runtime::{StreamChunk, StreamId, StreamManager};
-pub use task::{
-    FetchInit, HttpRequest, HttpResponse, RESPONSE_STREAM_BUFFER_SIZE, ResponseBody, ScheduledInit,
-    Task, TaskType,
-};
 pub use worker::Worker;
+
+// Re-export common types from openworkers-common
+pub use openworkers_core::{
+    FetchInit, HttpRequest, HttpResponse, LogEvent, LogLevel, LogSender, ResponseBody,
+    RuntimeLimits, ScheduledInit, Script, Task, TaskType, TerminationReason, Worker as WorkerTrait,
+};
 
 // Re-export rquickjs for advanced usage
 pub use rquickjs;
