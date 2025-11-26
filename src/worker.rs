@@ -1,5 +1,5 @@
 use crate::compat::{RuntimeLimits, Script, TerminationReason};
-use crate::task::{HttpRequest, HttpResponse, ResponseBody, Task};
+use crate::task::{HttpRequest, HttpResponse, RESPONSE_STREAM_BUFFER_SIZE, ResponseBody, Task};
 use bytes::Bytes;
 use rquickjs::{
     AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async, promise::Promise,
@@ -953,46 +953,66 @@ impl Worker {
             let is_stream: bool = response.get("_isStream").unwrap_or(false);
 
             let body = if is_stream {
-                // For streaming responses, read the stream using JS helper
+                // Collect all chunks first (QuickJS context is not Send)
+                let mut chunks: Vec<Vec<u8>> = Vec::new();
+
                 // Set the response on globalThis temporarily for the helper to access
                 let global = ctx.globals();
                 global.set("__streamResponse", response.clone())
                     .map_err(|e| format!("Failed to set __streamResponse: {}", e))?;
 
-                let read_stream_code = r#"
+                // Read chunks one by one
+                let read_chunk_code = r#"
                     (async () => {
-                        const stream = __streamResponse._body;
-                        const reader = stream.getReader();
-                        const chunks = [];
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-                            if (value) chunks.push(value);
+                        if (!globalThis.__streamReader) {
+                            const stream = __streamResponse._body;
+                            globalThis.__streamReader = stream.getReader();
                         }
-                        // Concatenate all chunks
-                        const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-                        const result = new Uint8Array(totalLength);
-                        let offset = 0;
-                        for (const chunk of chunks) {
-                            result.set(chunk, offset);
-                            offset += chunk.length;
+                        const { done, value } = await globalThis.__streamReader.read();
+                        if (done) {
+                            delete globalThis.__streamReader;
+                            return { done: true };
                         }
-                        return result;
+                        return { done: false, value: value };
                     })()
                 "#;
 
-                let read_promise: Promise = ctx.eval(read_stream_code.as_bytes())
-                    .map_err(|e| format!("Failed to eval stream read: {}", e))?;
-                let result_array: rquickjs::TypedArray<u8> = read_promise.into_future().await
-                    .map_err(|e| format!("Failed to read stream: {}", e))?;
+                // Read all chunks into memory
+                loop {
+                    let read_promise: Promise = ctx.eval(read_chunk_code.as_bytes())
+                        .map_err(|e| format!("Failed to eval chunk read: {}", e))?;
+                    let result: Object = read_promise.into_future().await
+                        .map_err(|e| format!("Failed to read chunk: {}", e))?;
 
-                let all_data: Vec<u8> = result_array.as_bytes().unwrap_or(&[]).to_vec();
+                    let done: bool = result.get("done").unwrap_or(true);
+                    if done {
+                        break;
+                    }
 
-                // Clean up
-                global.remove("__streamResponse")
-                    .map_err(|e| format!("Failed to remove __streamResponse: {}", e))?;
+                    // Get value (Uint8Array)
+                    if let Ok(value) = result.get::<_, rquickjs::TypedArray<u8>>("value") {
+                        let chunk_data: Vec<u8> = value.as_bytes().unwrap_or(&[]).to_vec();
+                        chunks.push(chunk_data);
+                    }
+                }
 
-                ResponseBody::Bytes(Bytes::from(all_data))
+                // Clean up JS state
+                global.remove("__streamResponse").ok();
+                global.remove("__streamReader").ok();
+
+                // Create channel and spawn task to send chunks
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, String>>(RESPONSE_STREAM_BUFFER_SIZE);
+
+                tokio::spawn(async move {
+                    for chunk in chunks {
+                        if tx.send(Ok(Bytes::from(chunk))).await.is_err() {
+                            break; // Receiver dropped
+                        }
+                    }
+                    // tx drops here, closing the channel
+                });
+
+                ResponseBody::Stream(rx)
             } else if let Ok(raw_body) = response.get::<_, String>("_body") {
                 ResponseBody::Bytes(Bytes::from(raw_body))
             } else {

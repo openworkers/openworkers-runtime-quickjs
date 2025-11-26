@@ -29,16 +29,23 @@ async fn test_readable_stream_basic() {
     };
 
     let (task, rx) = Task::fetch(request);
-    let result = worker.exec(task).await;
-    println!("exec result: {:?}", result);
-    result.expect("Task should execute");
+    worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    // Stream is buffered into bytes
-    let body = response.body.as_bytes().expect("Should have body");
-    assert_eq!(String::from_utf8_lossy(body), "Hello World!");
+    // True streaming - collect from channel
+    if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+        let mut data = Vec::new();
+        while let Some(chunk) = stream_rx.recv().await {
+            if let Ok(bytes) = chunk {
+                data.extend_from_slice(&bytes);
+            }
+        }
+        assert_eq!(String::from_utf8_lossy(&data), "Hello World!");
+    } else {
+        panic!("Expected streaming response, got buffered");
+    }
 }
 
 #[tokio::test]
@@ -78,11 +85,21 @@ async fn test_readable_stream_with_pull() {
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    let body = response.body.as_bytes().expect("Should have body");
-    let result = String::from_utf8_lossy(body);
-    assert!(result.contains("Chunk 0"));
-    assert!(result.contains("Chunk 1"));
-    assert!(result.contains("Chunk 2"));
+    // True streaming - collect from channel
+    if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+        let mut data = Vec::new();
+        while let Some(chunk) = stream_rx.recv().await {
+            if let Ok(bytes) = chunk {
+                data.extend_from_slice(&bytes);
+            }
+        }
+        let result = String::from_utf8_lossy(&data);
+        assert!(result.contains("Chunk 0"));
+        assert!(result.contains("Chunk 1"));
+        assert!(result.contains("Chunk 2"));
+    } else {
+        panic!("Expected streaming response");
+    }
 }
 
 #[tokio::test]
@@ -186,8 +203,19 @@ async fn test_readable_stream_async_pull() {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.as_bytes().expect("Should have body");
-    let result = String::from_utf8_lossy(body);
-    assert!(result.contains("Async 0"));
-    assert!(result.contains("Async 1"));
+
+    // True streaming - collect from channel
+    if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+        let mut data = Vec::new();
+        while let Some(chunk) = stream_rx.recv().await {
+            if let Ok(bytes) = chunk {
+                data.extend_from_slice(&bytes);
+            }
+        }
+        let result = String::from_utf8_lossy(&data);
+        assert!(result.contains("Async 0"));
+        assert!(result.contains("Async 1"));
+    } else {
+        panic!("Expected streaming response");
+    }
 }

@@ -138,6 +138,58 @@ async fn bench_async_response(iterations: u32) -> Duration {
     start.elapsed()
 }
 
+async fn bench_streaming_response(iterations: u32, chunks: u32) -> (Duration, usize) {
+    let code = format!(
+        r#"
+        addEventListener('fetch', (event) => {{
+            let count = 0;
+            const stream = new ReadableStream({{
+                pull(controller) {{
+                    if (count < {}) {{
+                        controller.enqueue(new TextEncoder().encode('Chunk ' + count + '\\n'));
+                        count++;
+                    }} else {{
+                        controller.close();
+                    }}
+                }}
+            }});
+            event.respondWith(new Response(stream));
+        }});
+    "#,
+        chunks
+    );
+
+    let script = Script::new(&code);
+    let mut worker = Worker::new(script, None, None).await.unwrap();
+
+    let start = Instant::now();
+    let mut total_bytes = 0;
+
+    for _ in 0..iterations {
+        let req = HttpRequest {
+            method: "GET".to_string(),
+            url: "http://localhost/".to_string(),
+            headers: HashMap::new(),
+            body: None,
+        };
+
+        let (task, rx) = Task::fetch(req);
+        worker.exec(task).await.unwrap();
+        let response = rx.await.unwrap();
+
+        // Consume the stream
+        if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+            while let Some(chunk) = stream_rx.recv().await {
+                if let Ok(bytes) = chunk {
+                    total_bytes += bytes.len();
+                }
+            }
+        }
+    }
+
+    (start.elapsed(), total_bytes)
+}
+
 #[tokio::main]
 async fn main() {
     println!("🚀 OpenWorkers QuickJS Streaming Benchmark\n");
@@ -211,6 +263,38 @@ async fn main() {
         elapsed,
         per_request,
         iterations as f64 / elapsed.as_secs_f64()
+    );
+
+    // Benchmark 6: Streaming responses (10 chunks)
+    println!("🌊 Streaming Response (10 chunks):");
+    let iterations = 500;
+    let chunks = 10;
+    let (elapsed, total_bytes) = bench_streaming_response(iterations, chunks).await;
+    let per_request = elapsed / iterations;
+    let mb_per_sec = (total_bytes as f64 / 1_000_000.0) / elapsed.as_secs_f64();
+    println!(
+        "  {} iterations in {:.2?} ({:.2?}/req, {:.0} req/s, {:.2} MB/s)\n",
+        iterations,
+        elapsed,
+        per_request,
+        iterations as f64 / elapsed.as_secs_f64(),
+        mb_per_sec
+    );
+
+    // Benchmark 7: Streaming responses (100 chunks)
+    println!("🌊 Streaming Response (100 chunks):");
+    let iterations = 100;
+    let chunks = 100;
+    let (elapsed, total_bytes) = bench_streaming_response(iterations, chunks).await;
+    let per_request = elapsed / iterations;
+    let mb_per_sec = (total_bytes as f64 / 1_000_000.0) / elapsed.as_secs_f64();
+    println!(
+        "  {} iterations in {:.2?} ({:.2?}/req, {:.0} req/s, {:.2} MB/s)\n",
+        iterations,
+        elapsed,
+        per_request,
+        iterations as f64 / elapsed.as_secs_f64(),
+        mb_per_sec
     );
 
     println!("========================================");
