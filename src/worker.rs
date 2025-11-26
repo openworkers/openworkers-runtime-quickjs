@@ -95,6 +95,265 @@ const RUNTIME_JS: &str = r#"
         }
     };
 
+    // ReadableStream implementation (simplified WHATWG spec)
+    globalThis.ReadableStream = class ReadableStream {
+        constructor(underlyingSource = {}) {
+            this._underlyingSource = underlyingSource;
+            this._controller = null;
+            this._reader = null;
+            this._state = 'readable'; // 'readable', 'closed', 'errored'
+            this._storedError = null;
+
+            // Create controller
+            const controller = new ReadableStreamDefaultController(this);
+            this._controller = controller;
+
+            // Start the stream
+            if (underlyingSource.start) {
+                const startPromise = Promise.resolve(underlyingSource.start(controller));
+                startPromise.catch(e => {
+                    controller.error(e);
+                });
+            }
+        }
+
+        getReader() {
+            if (this._reader) {
+                throw new TypeError('ReadableStream is locked to a reader');
+            }
+            const reader = new ReadableStreamDefaultReader(this);
+            this._reader = reader;
+            return reader;
+        }
+
+        cancel(reason) {
+            if (this._state === 'closed') {
+                return Promise.resolve();
+            }
+            if (this._state === 'errored') {
+                return Promise.reject(this._storedError);
+            }
+
+            this._state = 'closed';
+
+            if (this._reader) {
+                this._reader._closePending();
+                this._reader = null;
+            }
+
+            if (this._underlyingSource.cancel) {
+                return Promise.resolve(this._underlyingSource.cancel(reason));
+            }
+
+            return Promise.resolve();
+        }
+
+        get locked() {
+            return this._reader !== null;
+        }
+    };
+
+    // ReadableStreamDefaultController
+    globalThis.ReadableStreamDefaultController = class ReadableStreamDefaultController {
+        constructor(stream) {
+            this._stream = stream;
+            this._queue = [];
+            this._closeRequested = false;
+        }
+
+        enqueue(chunk) {
+            if (this._closeRequested) {
+                throw new TypeError('Cannot enqueue after close');
+            }
+            if (this._stream._state !== 'readable') {
+                throw new TypeError('Stream is not in readable state');
+            }
+
+            this._queue.push({ type: 'chunk', value: chunk });
+            this._processQueue();
+        }
+
+        close() {
+            if (this._closeRequested) {
+                throw new TypeError('Stream is already closing');
+            }
+            if (this._stream._state !== 'readable') {
+                throw new TypeError('Stream is not in readable state');
+            }
+
+            this._closeRequested = true;
+            this._queue.push({ type: 'close' });
+            this._processQueue();
+        }
+
+        error(error) {
+            if (this._stream._state !== 'readable') {
+                return;
+            }
+
+            this._stream._state = 'errored';
+            this._stream._storedError = error;
+
+            if (this._stream._reader) {
+                this._stream._reader._errorPending(error);
+            }
+
+            this._queue = [];
+        }
+
+        _processQueue() {
+            if (this._stream._reader) {
+                this._stream._reader._processQueue();
+            }
+        }
+
+        get desiredSize() {
+            if (this._stream._state === 'errored') {
+                return null;
+            }
+            if (this._stream._state === 'closed') {
+                return 0;
+            }
+            return Math.max(0, 1 - this._queue.length);
+        }
+    };
+
+    // ReadableStreamDefaultReader
+    globalThis.ReadableStreamDefaultReader = class ReadableStreamDefaultReader {
+        constructor(stream) {
+            if (stream._reader) {
+                throw new TypeError('Stream is already locked');
+            }
+
+            this._stream = stream;
+            this._readRequests = [];
+            this._closedPromise = null;
+            this._closedPromiseResolve = null;
+            this._closedPromiseReject = null;
+
+            this._closedPromise = new Promise((resolve, reject) => {
+                this._closedPromiseResolve = resolve;
+                this._closedPromiseReject = reject;
+            });
+        }
+
+        read() {
+            if (!this._stream) {
+                return Promise.reject(new TypeError('Reader is released'));
+            }
+
+            if (this._stream._state === 'errored') {
+                return Promise.reject(this._stream._storedError);
+            }
+
+            const controller = this._stream._controller;
+
+            if (controller._queue.length > 0) {
+                const item = controller._queue.shift();
+
+                if (item.type === 'close') {
+                    this._stream._state = 'closed';
+                    this._closePending();
+                    return Promise.resolve({ done: true, value: undefined });
+                }
+
+                return Promise.resolve({ done: false, value: item.value });
+            }
+
+            if (this._stream._state === 'closed') {
+                return Promise.resolve({ done: true, value: undefined });
+            }
+
+            const underlyingSource = this._stream._underlyingSource;
+            if (underlyingSource && underlyingSource.pull) {
+                return new Promise((resolve, reject) => {
+                    this._readRequests.push({ resolve, reject });
+                    const pullPromise = underlyingSource.pull(controller);
+                    if (pullPromise && typeof pullPromise.then === 'function') {
+                        pullPromise.catch(e => {
+                            controller.error(e);
+                        });
+                    }
+                });
+            }
+
+            return new Promise((resolve, reject) => {
+                this._readRequests.push({ resolve, reject });
+            });
+        }
+
+        _processQueue() {
+            const controller = this._stream._controller;
+
+            while (this._readRequests.length > 0 && controller._queue.length > 0) {
+                const request = this._readRequests.shift();
+                const item = controller._queue.shift();
+
+                if (item.type === 'close') {
+                    this._stream._state = 'closed';
+                    request.resolve({ done: true, value: undefined });
+                    this._closePending();
+                    break;
+                } else {
+                    request.resolve({ done: false, value: item.value });
+                }
+            }
+
+            if (this._stream._state === 'closed' && this._readRequests.length > 0) {
+                while (this._readRequests.length > 0) {
+                    const request = this._readRequests.shift();
+                    request.resolve({ done: true, value: undefined });
+                }
+            }
+        }
+
+        _closePending() {
+            if (this._closedPromiseResolve) {
+                this._closedPromiseResolve();
+                this._closedPromiseResolve = null;
+            }
+        }
+
+        _errorPending(error) {
+            while (this._readRequests.length > 0) {
+                const request = this._readRequests.shift();
+                request.reject(error);
+            }
+
+            if (this._closedPromiseReject) {
+                this._closedPromiseReject(error);
+                this._closedPromiseReject = null;
+            }
+        }
+
+        releaseLock() {
+            if (!this._stream) {
+                return;
+            }
+
+            if (this._readRequests.length > 0) {
+                throw new TypeError('Cannot release lock while read requests are pending');
+            }
+
+            this._stream._reader = null;
+            this._stream = null;
+        }
+
+        cancel(reason) {
+            if (!this._stream) {
+                return Promise.reject(new TypeError('Reader is released'));
+            }
+
+            const cancelPromise = this._stream.cancel(reason);
+            this.releaseLock();
+            return cancelPromise;
+        }
+
+        get closed() {
+            return this._closedPromise;
+        }
+    };
+
     // Response class
     globalThis.Response = class Response {
         constructor(body, init) {
@@ -103,10 +362,15 @@ const RUNTIME_JS: &str = r#"
             this.statusText = init.statusText || 'OK';
             this.headers = new Headers(init.headers);
             this.ok = this.status >= 200 && this.status < 300;
+            this._bodyUsed = false;
+            this._isStream = false;
 
             // Handle body
             if (body === null || body === undefined) {
                 this._body = null;
+            } else if (body instanceof ReadableStream) {
+                this._body = body;
+                this._isStream = true;
             } else if (typeof body === 'string') {
                 this._body = body;
             } else if (body instanceof Uint8Array) {
@@ -116,8 +380,59 @@ const RUNTIME_JS: &str = r#"
             }
         }
 
+        get body() {
+            if (this._isStream) {
+                return this._body;
+            }
+            // Convert non-stream body to ReadableStream
+            if (this._body === null) {
+                return null;
+            }
+            const content = this._body;
+            return new ReadableStream({
+                start(controller) {
+                    if (typeof content === 'string') {
+                        controller.enqueue(new TextEncoder().encode(content));
+                    } else if (content instanceof Uint8Array) {
+                        controller.enqueue(content);
+                    }
+                    controller.close();
+                }
+            });
+        }
+
+        get bodyUsed() {
+            return this._bodyUsed;
+        }
+
         async text() {
+            if (this._bodyUsed) {
+                throw new TypeError('Body has already been consumed');
+            }
+            this._bodyUsed = true;
+
             if (this._body === null) return '';
+
+            if (this._isStream) {
+                // Read entire stream
+                const reader = this._body.getReader();
+                const chunks = [];
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                }
+                // Concatenate chunks
+                const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+                const result = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const chunk of chunks) {
+                    result.set(chunk, offset);
+                    offset += chunk.length;
+                }
+                return new TextDecoder().decode(result);
+            }
+
             if (typeof this._body === 'string') return this._body;
             if (this._body instanceof Uint8Array) {
                 return new TextDecoder().decode(this._body);
@@ -131,20 +446,53 @@ const RUNTIME_JS: &str = r#"
         }
 
         async arrayBuffer() {
+            if (this._bodyUsed) {
+                throw new TypeError('Body has already been consumed');
+            }
+            this._bodyUsed = true;
+
             if (this._body === null) return new ArrayBuffer(0);
+
+            if (this._isStream) {
+                const reader = this._body.getReader();
+                const chunks = [];
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                }
+                const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+                const result = new Uint8Array(totalLength);
+                let offset = 0;
+                for (const chunk of chunks) {
+                    result.set(chunk, offset);
+                    offset += chunk.length;
+                }
+                return result.buffer;
+            }
+
             if (this._body instanceof Uint8Array) {
                 return this._body.buffer;
             }
             const encoder = new TextEncoder();
-            return encoder.encode(await this.text()).buffer;
+            const text = typeof this._body === 'string' ? this._body : String(this._body);
+            return encoder.encode(text).buffer;
         }
 
         clone() {
+            if (this._bodyUsed) {
+                throw new TypeError('Cannot clone a used body');
+            }
             return new Response(this._body, {
                 status: this.status,
                 statusText: this.statusText,
                 headers: this.headers
             });
+        }
+
+        // Helper to check if response is streaming
+        _isStreamingResponse() {
+            return this._isStream;
         }
 
         // Helper to get raw body for Rust extraction
@@ -601,8 +949,51 @@ impl Worker {
                 }
             }
 
-            // Extract body
-            let body = if let Ok(raw_body) = response.get::<_, String>("_body") {
+            // Check if response is a stream
+            let is_stream: bool = response.get("_isStream").unwrap_or(false);
+
+            let body = if is_stream {
+                // For streaming responses, read the stream using JS helper
+                // Set the response on globalThis temporarily for the helper to access
+                let global = ctx.globals();
+                global.set("__streamResponse", response.clone())
+                    .map_err(|e| format!("Failed to set __streamResponse: {}", e))?;
+
+                let read_stream_code = r#"
+                    (async () => {
+                        const stream = __streamResponse._body;
+                        const reader = stream.getReader();
+                        const chunks = [];
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            if (value) chunks.push(value);
+                        }
+                        // Concatenate all chunks
+                        const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+                        const result = new Uint8Array(totalLength);
+                        let offset = 0;
+                        for (const chunk of chunks) {
+                            result.set(chunk, offset);
+                            offset += chunk.length;
+                        }
+                        return result;
+                    })()
+                "#;
+
+                let read_promise: Promise = ctx.eval(read_stream_code.as_bytes())
+                    .map_err(|e| format!("Failed to eval stream read: {}", e))?;
+                let result_array: rquickjs::TypedArray<u8> = read_promise.into_future().await
+                    .map_err(|e| format!("Failed to read stream: {}", e))?;
+
+                let all_data: Vec<u8> = result_array.as_bytes().unwrap_or(&[]).to_vec();
+
+                // Clean up
+                global.remove("__streamResponse")
+                    .map_err(|e| format!("Failed to remove __streamResponse: {}", e))?;
+
+                ResponseBody::Bytes(Bytes::from(all_data))
+            } else if let Ok(raw_body) = response.get::<_, String>("_body") {
                 ResponseBody::Bytes(Bytes::from(raw_body))
             } else {
                 ResponseBody::None
