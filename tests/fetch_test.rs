@@ -1,4 +1,5 @@
-use openworkers_runtime_quickjs::{HttpRequest, Script, Task, Worker};
+use openworkers_core::{HttpMethod, HttpRequest, RequestBody, ResponseBody, Script, Task};
+use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -20,10 +21,10 @@ async fn test_fetch_basic_get() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -36,8 +37,8 @@ async fn test_fetch_basic_get() {
 
     assert_eq!(response.status, 200);
 
-    let body = response.body.as_bytes().expect("Should have body");
-    let json: serde_json::Value = serde_json::from_slice(body).expect("Should be valid JSON");
+    let body = response.body.collect().await.expect("Should have body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["status"], 200);
     assert_eq!(json["hasUrl"], true);
 }
@@ -65,10 +66,10 @@ async fn test_fetch_post_with_body() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -81,8 +82,8 @@ async fn test_fetch_post_with_body() {
 
     assert_eq!(response.status, 200);
 
-    let body = response.body.as_bytes().expect("Should have body");
-    let json: serde_json::Value = serde_json::from_slice(body).expect("Should be valid JSON");
+    let body = response.body.collect().await.expect("Should have body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["status"], 200);
     assert_eq!(json["receivedData"]["hello"], "world");
 }
@@ -108,10 +109,10 @@ async fn test_fetch_with_headers() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -124,8 +125,8 @@ async fn test_fetch_with_headers() {
 
     assert_eq!(response.status, 200);
 
-    let body = response.body.as_bytes().expect("Should have body");
-    let json: serde_json::Value = serde_json::from_slice(body).expect("Should be valid JSON");
+    let body = response.body.collect().await.expect("Should have body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["customHeader"], "test-value");
 }
 
@@ -145,10 +146,10 @@ async fn test_fetch_forward() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -161,8 +162,8 @@ async fn test_fetch_forward() {
 
     assert_eq!(response.status, 200);
 
-    let body = response.body.as_bytes().expect("Should have body");
-    let body_str = String::from_utf8_lossy(body);
+    let body = response.body.collect().await.expect("Should have body");
+    let body_str = String::from_utf8_lossy(&body);
     assert!(
         body_str.contains("httpbin.workers.rocks"),
         "Should contain httpbin response"
@@ -187,10 +188,10 @@ async fn test_fetch_404() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -201,8 +202,8 @@ async fn test_fetch_404() {
         .expect("Should receive response within timeout")
         .expect("Channel should not close");
 
-    let body = response.body.as_bytes().expect("Should have body");
-    let json: serde_json::Value = serde_json::from_slice(body).expect("Should be valid JSON");
+    let body = response.body.collect().await.expect("Should have body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["status"], 404);
     assert_eq!(json["ok"], false);
 }

@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use openworkers_core::{
-    HttpRequest, HttpResponse, LogSender, ResponseBody, RuntimeLimits, Script, Task,
+    HttpRequest, HttpResponse, LogSender, RequestBody, ResponseBody, RuntimeLimits, Script, Task,
     TerminationReason,
 };
 use rquickjs::{
@@ -923,10 +923,10 @@ impl Worker {
             let headers_json: String = serde_json::to_string(&request.headers)
                 .unwrap_or_else(|_| "{}".to_string());
 
-            let body_str = request.body
-                .as_ref()
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_default();
+            let body_str = match &request.body {
+                RequestBody::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+                RequestBody::None => String::new(),
+            };
 
             let dispatch_code = format!(
                 r#"__dispatchFetch({{
@@ -1031,7 +1031,16 @@ impl Worker {
 
                 ResponseBody::Stream(rx)
             } else if let Ok(raw_body) = response.get::<_, String>("_body") {
-                ResponseBody::Bytes(Bytes::from(raw_body))
+                // Convert buffered body to stream for consistency
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, String>>(1);
+                let body_bytes = Bytes::from(raw_body);
+
+                tokio::spawn(async move {
+                    let _ = tx.send(Ok(body_bytes)).await;
+                    // tx drops here, closing the channel
+                });
+
+                ResponseBody::Stream(rx)
             } else {
                 ResponseBody::None
             };

@@ -1,4 +1,5 @@
-use openworkers_runtime_quickjs::{Script, Task, Worker};
+use openworkers_core::{Script, Task};
+use openworkers_runtime_quickjs::Worker;
 
 #[tokio::test]
 async fn test_scheduled_basic() {

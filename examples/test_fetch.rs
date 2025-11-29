@@ -1,4 +1,5 @@
-use openworkers_runtime_quickjs::{HttpRequest, Script, Task, Worker};
+use openworkers_core::{HttpMethod, HttpRequest, RequestBody, Script, Task};
+use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -28,10 +29,10 @@ async fn main() {
     println!("Worker created, executing fetch...");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -40,7 +41,7 @@ async fn main() {
     let response = rx.await.expect("Should receive response");
     println!("Response status: {}", response.status);
 
-    if let Some(body) = response.body.as_bytes() {
-        println!("Response body: {}", String::from_utf8_lossy(body));
+    if let Some(body) = response.body.collect().await {
+        println!("Response body: {}", String::from_utf8_lossy(&body));
     }
 }

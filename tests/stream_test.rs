@@ -1,4 +1,5 @@
-use openworkers_runtime_quickjs::{HttpRequest, Script, Task, Worker};
+use openworkers_core::{HttpMethod, HttpRequest, RequestBody, ResponseBody, Script, Task};
+use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -22,10 +23,10 @@ async fn test_readable_stream_basic() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -35,7 +36,7 @@ async fn test_readable_stream_basic() {
     assert_eq!(response.status, 200);
 
     // True streaming - collect from channel
-    if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+    if let ResponseBody::Stream(mut stream_rx) = response.body {
         let mut data = Vec::new();
         while let Some(chunk) = stream_rx.recv().await {
             if let Ok(bytes) = chunk {
@@ -73,10 +74,10 @@ async fn test_readable_stream_with_pull() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -86,7 +87,7 @@ async fn test_readable_stream_with_pull() {
     assert_eq!(response.status, 200);
 
     // True streaming - collect from channel
-    if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+    if let ResponseBody::Stream(mut stream_rx) = response.body {
         let mut data = Vec::new();
         while let Some(chunk) = stream_rx.recv().await {
             if let Ok(bytes) = chunk {
@@ -117,10 +118,10 @@ async fn test_non_stream_response() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -129,8 +130,8 @@ async fn test_non_stream_response() {
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    let body = response.body.as_bytes().expect("Should have body");
-    assert_eq!(String::from_utf8_lossy(body), "Hello World");
+    let body = response.body.collect().await.expect("Should have body");
+    assert_eq!(String::from_utf8_lossy(&body), "Hello World");
 }
 
 #[tokio::test]
@@ -151,18 +152,18 @@ async fn test_response_body_property() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.as_bytes().expect("Should have body");
-    let json: serde_json::Value = serde_json::from_slice(body).expect("Should be valid JSON");
+    let body = response.body.collect().await.expect("Should have body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["hasBody"], true);
     assert_eq!(json["isStream"], true);
 }
@@ -193,10 +194,10 @@ async fn test_readable_stream_async_pull() {
         .expect("Worker should initialize");
 
     let request = HttpRequest {
-        method: "GET".to_string(),
+        method: HttpMethod::Get,
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
-        body: None,
+        body: RequestBody::None,
     };
 
     let (task, rx) = Task::fetch(request);
@@ -205,7 +206,7 @@ async fn test_readable_stream_async_pull() {
     let response = rx.await.expect("Should receive response");
 
     // True streaming - collect from channel
-    if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+    if let openworkers_core::ResponseBody::Stream(mut stream_rx) = response.body {
         let mut data = Vec::new();
         while let Some(chunk) = stream_rx.recv().await {
             if let Ok(bytes) = chunk {

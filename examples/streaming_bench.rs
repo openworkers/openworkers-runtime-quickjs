@@ -1,4 +1,5 @@
-use openworkers_runtime_quickjs::{HttpRequest, Script, Task, Worker};
+use openworkers_core::{HttpMethod, HttpRequest, RequestBody, ResponseBody, Script, Task};
+use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -16,10 +17,10 @@ async fn bench_buffered_response(iterations: u32) -> Duration {
 
     for _ in 0..iterations {
         let req = HttpRequest {
-            method: "GET".to_string(),
+            method: HttpMethod::Get,
             url: "http://localhost/".to_string(),
             headers: HashMap::new(),
-            body: None,
+            body: RequestBody::None,
         };
 
         let (task, rx) = Task::fetch(req);
@@ -47,10 +48,10 @@ async fn bench_json_response(iterations: u32) -> Duration {
 
     for _ in 0..iterations {
         let req = HttpRequest {
-            method: "GET".to_string(),
+            method: HttpMethod::Get,
             url: "http://localhost/".to_string(),
             headers: HashMap::new(),
-            body: None,
+            body: RequestBody::None,
         };
 
         let (task, rx) = Task::fetch(req);
@@ -93,10 +94,10 @@ async fn bench_url_parsing(iterations: u32) -> Duration {
 
     for _ in 0..iterations {
         let req = HttpRequest {
-            method: "GET".to_string(),
+            method: HttpMethod::Get,
             url: "http://localhost/api/v1/users/123".to_string(),
             headers: HashMap::new(),
-            body: None,
+            body: RequestBody::None,
         };
 
         let (task, rx) = Task::fetch(req);
@@ -124,10 +125,10 @@ async fn bench_async_response(iterations: u32) -> Duration {
 
     for _ in 0..iterations {
         let req = HttpRequest {
-            method: "GET".to_string(),
+            method: HttpMethod::Get,
             url: "http://localhost/".to_string(),
             headers: HashMap::new(),
-            body: None,
+            body: RequestBody::None,
         };
 
         let (task, rx) = Task::fetch(req);
@@ -167,10 +168,10 @@ async fn bench_streaming_response(iterations: u32, chunks: u32) -> (Duration, us
 
     for _ in 0..iterations {
         let req = HttpRequest {
-            method: "GET".to_string(),
+            method: HttpMethod::Get,
             url: "http://localhost/".to_string(),
             headers: HashMap::new(),
-            body: None,
+            body: RequestBody::None,
         };
 
         let (task, rx) = Task::fetch(req);
@@ -178,7 +179,7 @@ async fn bench_streaming_response(iterations: u32, chunks: u32) -> (Duration, us
         let response = rx.await.unwrap();
 
         // Consume the stream
-        if let openworkers_runtime_quickjs::ResponseBody::Stream(mut stream_rx) = response.body {
+        if let ResponseBody::Stream(mut stream_rx) = response.body {
             while let Some(chunk) = stream_rx.recv().await {
                 if let Ok(bytes) = chunk {
                     total_bytes += bytes.len();

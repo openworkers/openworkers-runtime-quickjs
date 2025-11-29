@@ -11,15 +11,17 @@ A lightweight JavaScript runtime for OpenWorkers based on QuickJS, providing fas
 - **Async/Await**: Full ES2023 async support with Promises
 - **Scheduled Events**: Cron-style scheduled task execution
 
-## Performance Comparison
+## Runtime Comparison (v0.5.0)
 
-| Runtime | Buffered req/s | Worker Creation |
-|---------|---------------|-----------------|
-| **QuickJS** | **85,000** | 850µs |
-| V8 | 59,500 | ~800µs |
-| JSC | 18,600 | ~957µs |
+| Runtime | Engine | Worker::new() | exec_simple | exec_json | Tests |
+|---------|--------|---------------|-------------|-----------|-------|
+| **[QuickJS](https://github.com/openworkers/openworkers-runtime-quickjs)** | QuickJS | 738µs | **12.4µs** ⚡ | **13.7µs** | 16/17 |
+| **[V8](https://github.com/openworkers/openworkers-runtime-v8)** | V8 | 790µs | 32.3µs | 34.3µs | **17/17** |
+| **[JSC](https://github.com/openworkers/openworkers-runtime-jsc)** | JavaScriptCore | 1.07ms | 30.3µs | 28.3µs | 15/17 |
+| **[Deno](https://github.com/openworkers/openworkers-runtime-deno)** | V8 + Deno | 2.56ms | 46.8µs | 38.7µs | **17/17** |
+| **[Boa](https://github.com/openworkers/openworkers-runtime-boa)** | Boa | 738µs | 12.4µs | 13.7µs | 13/17 |
 
-QuickJS is **1.4x faster than V8** and **4.6x faster than JSC** for simple requests.
+**QuickJS has the fastest exec time** (~12µs) - ideal for high-throughput scenarios.
 
 ## Usage
 

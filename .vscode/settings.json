@@ -1,3 +1,11 @@
 {
-  "cSpell.words": ["openworkers", "quickjs", "rquickjs"]
+  "cSpell.words": [
+    "actix",
+    "openworkers",
+    "quickjs",
+    "reqwest",
+    "rquickjs",
+    "rustls",
+    "serde"
+  ]
 }
