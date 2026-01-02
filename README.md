@@ -1,6 +1,6 @@
 # OpenWorkers QuickJS Runtime
 
-A lightweight JavaScript runtime for OpenWorkers based on QuickJS, providing fast cold starts and efficient execution for edge computing workloads.
+A lightweight JavaScript runtime for OpenWorkers based on QuickJS, providing fast cold starts and low memory footprint.
 
 ## Features
 
