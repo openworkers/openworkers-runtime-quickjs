@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use openworkers_core::{
-    DefaultOps, Event, HttpRequest, HttpResponse, OperationsHandle, RequestBody, ResponseBody,
-    RuntimeLimits, Script, TaskResult, TerminationReason,
+    DefaultOps, Event, HttpRequest, HttpResponse, LogLevel, OperationsHandle, RequestBody,
+    ResponseBody, RuntimeLimits, Script, TaskResult, TerminationReason,
 };
 use rquickjs::{
     AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async, promise::Promise,
@@ -27,23 +27,17 @@ const RUNTIME_JS: &str = r#"
         }
     };
 
-    // Console implementation
+    // Console implementation - each method calls its native function
+    const __formatArgs = (args) => args.map(a =>
+        typeof a === 'object' ? JSON.stringify(a) : String(a)
+    ).join(' ');
+
     globalThis.console = {
-        log: (...args) => __native_log(args.map(a =>
-            typeof a === 'object' ? JSON.stringify(a) : String(a)
-        ).join(' ')),
-        warn: (...args) => __native_log('[WARN] ' + args.map(a =>
-            typeof a === 'object' ? JSON.stringify(a) : String(a)
-        ).join(' ')),
-        error: (...args) => __native_log('[ERROR] ' + args.map(a =>
-            typeof a === 'object' ? JSON.stringify(a) : String(a)
-        ).join(' ')),
-        info: (...args) => __native_log('[INFO] ' + args.map(a =>
-            typeof a === 'object' ? JSON.stringify(a) : String(a)
-        ).join(' ')),
-        debug: (...args) => __native_log('[DEBUG] ' + args.map(a =>
-            typeof a === 'object' ? JSON.stringify(a) : String(a)
-        ).join(' '))
+        log: (...args) => __console_log(__formatArgs(args)),
+        warn: (...args) => __console_warn(__formatArgs(args)),
+        error: (...args) => __console_error(__formatArgs(args)),
+        info: (...args) => __console_info(__formatArgs(args)),
+        debug: (...args) => __console_debug(__formatArgs(args))
     };
 
     // Headers class
@@ -850,14 +844,42 @@ impl Worker {
             TerminationReason::InitializationError(format!("Failed to create context: {}", e))
         })?;
 
+        // Clone ops for use in closures
+        let ops_log = ops.clone();
+        let ops_warn = ops.clone();
+        let ops_error = ops.clone();
+        let ops_info = ops.clone();
+        let ops_debug = ops.clone();
+
         // Initialize runtime bindings and evaluate script
         async_with!(context => |ctx| {
-            // Setup native log function
+            // Setup native console functions that wire to OperationsHandle
             let global = ctx.globals();
-            let log_fn = Function::new(ctx.clone(), |msg: String| {
-                println!("[JS] {}", msg);
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create log function: {}", e)))?;
-            global.set("__native_log", log_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __native_log: {}", e)))?;
+
+            let log_fn = Function::new(ctx.clone(), move |msg: String| {
+                ops_log.handle_log(LogLevel::Log, msg);
+            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.log: {}", e)))?;
+            global.set("__console_log", log_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_log: {}", e)))?;
+
+            let warn_fn = Function::new(ctx.clone(), move |msg: String| {
+                ops_warn.handle_log(LogLevel::Warn, msg);
+            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.warn: {}", e)))?;
+            global.set("__console_warn", warn_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_warn: {}", e)))?;
+
+            let error_fn = Function::new(ctx.clone(), move |msg: String| {
+                ops_error.handle_log(LogLevel::Error, msg);
+            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.error: {}", e)))?;
+            global.set("__console_error", error_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_error: {}", e)))?;
+
+            let info_fn = Function::new(ctx.clone(), move |msg: String| {
+                ops_info.handle_log(LogLevel::Info, msg);
+            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.info: {}", e)))?;
+            global.set("__console_info", info_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_info: {}", e)))?;
+
+            let debug_fn = Function::new(ctx.clone(), move |msg: String| {
+                ops_debug.handle_log(LogLevel::Debug, msg);
+            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.debug: {}", e)))?;
+            global.set("__console_debug", debug_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_debug: {}", e)))?;
 
             // Setup native fetch function (returns a Promise)
             let fetch_fn = Function::new(ctx.clone(), Async(native_fetch))
