@@ -1,4 +1,4 @@
-use openworkers_core::{HttpMethod, HttpRequest, RequestBody, Script, Task};
+use openworkers_core::{Event, HttpMethod, HttpRequest, RequestBody, Script};
 use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ async fn test_fetch_basic_get() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -27,7 +27,7 @@ async fn test_fetch_basic_get() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
@@ -61,7 +61,7 @@ async fn test_fetch_post_with_body() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -72,7 +72,7 @@ async fn test_fetch_post_with_body() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
@@ -104,7 +104,7 @@ async fn test_fetch_with_headers() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -115,7 +115,7 @@ async fn test_fetch_with_headers() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
@@ -141,7 +141,7 @@ async fn test_fetch_forward() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -152,7 +152,7 @@ async fn test_fetch_forward() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
@@ -183,7 +183,7 @@ async fn test_fetch_404() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -194,7 +194,7 @@ async fn test_fetch_404() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)

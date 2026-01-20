@@ -1,4 +1,4 @@
-use openworkers_core::{HttpMethod, HttpRequest, RequestBody, ResponseBody, Script, Task};
+use openworkers_core::{Event, HttpMethod, HttpRequest, RequestBody, ResponseBody, Script};
 use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
 
@@ -18,7 +18,7 @@ async fn test_readable_stream_basic() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -29,7 +29,7 @@ async fn test_readable_stream_basic() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
@@ -38,11 +38,13 @@ async fn test_readable_stream_basic() {
     // True streaming - collect from channel
     if let ResponseBody::Stream(mut stream_rx) = response.body {
         let mut data = Vec::new();
+
         while let Some(chunk) = stream_rx.recv().await {
             if let Ok(bytes) = chunk {
                 data.extend_from_slice(&bytes);
             }
         }
+
         assert_eq!(String::from_utf8_lossy(&data), "Hello World!");
     } else {
         panic!("Expected streaming response, got buffered");
@@ -69,7 +71,7 @@ async fn test_readable_stream_with_pull() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -80,7 +82,7 @@ async fn test_readable_stream_with_pull() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
@@ -89,11 +91,13 @@ async fn test_readable_stream_with_pull() {
     // True streaming - collect from channel
     if let ResponseBody::Stream(mut stream_rx) = response.body {
         let mut data = Vec::new();
+
         while let Some(chunk) = stream_rx.recv().await {
             if let Ok(bytes) = chunk {
                 data.extend_from_slice(&bytes);
             }
         }
+
         let result = String::from_utf8_lossy(&data);
         assert!(result.contains("Chunk 0"));
         assert!(result.contains("Chunk 1"));
@@ -113,7 +117,7 @@ async fn test_non_stream_response() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -124,7 +128,7 @@ async fn test_non_stream_response() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
@@ -147,7 +151,7 @@ async fn test_response_body_property() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -158,7 +162,7 @@ async fn test_response_body_property() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
@@ -189,7 +193,7 @@ async fn test_readable_stream_async_pull() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
@@ -200,7 +204,7 @@ async fn test_readable_stream_async_pull() {
         body: RequestBody::None,
     };
 
-    let (task, rx) = Task::fetch(request);
+    let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
@@ -208,11 +212,13 @@ async fn test_readable_stream_async_pull() {
     // True streaming - collect from channel
     if let openworkers_core::ResponseBody::Stream(mut stream_rx) = response.body {
         let mut data = Vec::new();
+
         while let Some(chunk) = stream_rx.recv().await {
             if let Ok(bytes) = chunk {
                 data.extend_from_slice(&bytes);
             }
         }
+
         let result = String::from_utf8_lossy(&data);
         assert!(result.contains("Async 0"));
         assert!(result.contains("Async 1"));

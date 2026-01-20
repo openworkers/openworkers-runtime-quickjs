@@ -1,4 +1,4 @@
-use openworkers_core::{HttpMethod, HttpRequest, RequestBody, ResponseBody, Script, Task};
+use openworkers_core::{Event, HttpMethod, HttpRequest, RequestBody, ResponseBody, Script};
 use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -11,7 +11,7 @@ async fn bench_buffered_response(iterations: u32) -> Duration {
     "#;
 
     let script = Script::new(code);
-    let mut worker = Worker::new(script, None, None).await.unwrap();
+    let mut worker = Worker::new(script, None).await.unwrap();
 
     let start = Instant::now();
 
@@ -23,7 +23,7 @@ async fn bench_buffered_response(iterations: u32) -> Duration {
             body: RequestBody::None,
         };
 
-        let (task, rx) = Task::fetch(req);
+        let (task, rx) = Event::fetch(req);
         worker.exec(task).await.unwrap();
         let _ = rx.await.unwrap();
     }
@@ -42,7 +42,7 @@ async fn bench_json_response(iterations: u32) -> Duration {
     "#;
 
     let script = Script::new(code);
-    let mut worker = Worker::new(script, None, None).await.unwrap();
+    let mut worker = Worker::new(script, None).await.unwrap();
 
     let start = Instant::now();
 
@@ -54,7 +54,7 @@ async fn bench_json_response(iterations: u32) -> Duration {
             body: RequestBody::None,
         };
 
-        let (task, rx) = Task::fetch(req);
+        let (task, rx) = Event::fetch(req);
         worker.exec(task).await.unwrap();
         let _ = rx.await.unwrap();
     }
@@ -73,7 +73,7 @@ async fn bench_worker_creation(iterations: u32) -> Duration {
 
     for _ in 0..iterations {
         let script = Script::new(code);
-        let _worker = Worker::new(script, None, None).await.unwrap();
+        let _worker = Worker::new(script, None).await.unwrap();
     }
 
     start.elapsed()
@@ -88,7 +88,7 @@ async fn bench_url_parsing(iterations: u32) -> Duration {
     "#;
 
     let script = Script::new(code);
-    let mut worker = Worker::new(script, None, None).await.unwrap();
+    let mut worker = Worker::new(script, None).await.unwrap();
 
     let start = Instant::now();
 
@@ -100,7 +100,7 @@ async fn bench_url_parsing(iterations: u32) -> Duration {
             body: RequestBody::None,
         };
 
-        let (task, rx) = Task::fetch(req);
+        let (task, rx) = Event::fetch(req);
         worker.exec(task).await.unwrap();
         let _ = rx.await.unwrap();
     }
@@ -119,7 +119,7 @@ async fn bench_async_response(iterations: u32) -> Duration {
     "#;
 
     let script = Script::new(code);
-    let mut worker = Worker::new(script, None, None).await.unwrap();
+    let mut worker = Worker::new(script, None).await.unwrap();
 
     let start = Instant::now();
 
@@ -131,7 +131,7 @@ async fn bench_async_response(iterations: u32) -> Duration {
             body: RequestBody::None,
         };
 
-        let (task, rx) = Task::fetch(req);
+        let (task, rx) = Event::fetch(req);
         worker.exec(task).await.unwrap();
         let _ = rx.await.unwrap();
     }
@@ -160,8 +160,8 @@ async fn bench_streaming_response(iterations: u32, chunks: u32) -> (Duration, us
         chunks
     );
 
-    let script = Script::new(&code);
-    let mut worker = Worker::new(script, None, None).await.unwrap();
+    let script = Script::new(&*code);
+    let mut worker = Worker::new(script, None).await.unwrap();
 
     let start = Instant::now();
     let mut total_bytes = 0;
@@ -174,7 +174,7 @@ async fn bench_streaming_response(iterations: u32, chunks: u32) -> (Duration, us
             body: RequestBody::None,
         };
 
-        let (task, rx) = Task::fetch(req);
+        let (task, rx) = Event::fetch(req);
         worker.exec(task).await.unwrap();
         let response = rx.await.unwrap();
 
@@ -193,7 +193,7 @@ async fn bench_streaming_response(iterations: u32, chunks: u32) -> (Duration, us
 
 #[tokio::main]
 async fn main() {
-    println!("🚀 OpenWorkers QuickJS Streaming Benchmark\n");
+    println!("OpenWorkers QuickJS Streaming Benchmark\n");
     println!("========================================\n");
 
     // Warmup
@@ -202,7 +202,7 @@ async fn main() {
     println!();
 
     // Benchmark 1: Worker creation
-    println!("🏗️  Worker Creation:");
+    println!("Worker Creation:");
     let iterations = 100;
     let elapsed = bench_worker_creation(iterations).await;
     let per_worker = elapsed / iterations;
@@ -215,7 +215,7 @@ async fn main() {
     );
 
     // Benchmark 2: Buffered responses
-    println!("📦 Buffered Response (local, no network):");
+    println!("Buffered Response (local, no network):");
     let iterations = 1000;
     let elapsed = bench_buffered_response(iterations).await;
     let per_request = elapsed / iterations;
@@ -228,7 +228,7 @@ async fn main() {
     );
 
     // Benchmark 3: JSON responses
-    println!("📄 JSON Response (local, no network):");
+    println!("JSON Response (local, no network):");
     let iterations = 1000;
     let elapsed = bench_json_response(iterations).await;
     let per_request = elapsed / iterations;
@@ -241,7 +241,7 @@ async fn main() {
     );
 
     // Benchmark 4: URL parsing
-    println!("🔗 URL Parsing:");
+    println!("URL Parsing:");
     let iterations = 1000;
     let elapsed = bench_url_parsing(iterations).await;
     let per_request = elapsed / iterations;
@@ -254,7 +254,7 @@ async fn main() {
     );
 
     // Benchmark 5: Async responses
-    println!("⚡ Async Response (Promise.resolve):");
+    println!("Async Response (Promise.resolve):");
     let iterations = 1000;
     let elapsed = bench_async_response(iterations).await;
     let per_request = elapsed / iterations;
@@ -267,7 +267,7 @@ async fn main() {
     );
 
     // Benchmark 6: Streaming responses (10 chunks)
-    println!("🌊 Streaming Response (10 chunks):");
+    println!("Streaming Response (10 chunks):");
     let iterations = 500;
     let chunks = 10;
     let (elapsed, total_bytes) = bench_streaming_response(iterations, chunks).await;
@@ -283,7 +283,7 @@ async fn main() {
     );
 
     // Benchmark 7: Streaming responses (100 chunks)
-    println!("🌊 Streaming Response (100 chunks):");
+    println!("Streaming Response (100 chunks):");
     let iterations = 100;
     let chunks = 100;
     let (elapsed, total_bytes) = bench_streaming_response(iterations, chunks).await;
@@ -299,9 +299,9 @@ async fn main() {
     );
 
     println!("========================================");
-    println!("📝 Summary:");
+    println!("Summary:");
     println!("  - QuickJS is lightweight (~200KB binary impact)");
     println!("  - Good for embedded/edge use cases");
     println!("  - ES2023 support with async/await");
-    println!("\n✅ Benchmark complete!");
+    println!("\nBenchmark complete!");
 }

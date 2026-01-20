@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use openworkers_core::{
-    HttpRequest, HttpResponse, LogSender, RequestBody, ResponseBody, RuntimeLimits, Script, Task,
-    TerminationReason,
+    DefaultOps, Event, HttpRequest, HttpResponse, OperationsHandle, RequestBody, ResponseBody,
+    RuntimeLimits, Script, TaskResult, TerminationReason,
 };
 use rquickjs::{
     AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async, promise::Promise,
@@ -832,14 +832,16 @@ pub struct Worker {
     runtime: AsyncRuntime,
     context: AsyncContext,
     aborted: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    ops: OperationsHandle,
 }
 
 impl Worker {
-    /// Create a new worker with the given script
-    pub async fn new(
+    /// Create a new worker with an OperationsHandler
+    pub async fn new_with_ops(
         script: Script,
-        _log_tx: Option<LogSender>,
         _limits: Option<RuntimeLimits>,
+        ops: OperationsHandle,
     ) -> Result<Self, TerminationReason> {
         let runtime = AsyncRuntime::new().map_err(|e| {
             TerminationReason::InitializationError(format!("Failed to create runtime: {}", e))
@@ -868,7 +870,12 @@ impl Worker {
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to evaluate runtime JS: {}", e)))?;
 
             // Evaluate user script
-            ctx.eval::<(), _>(script.code.as_str())
+            let js_code = script.code.as_js().ok_or_else(|| {
+                TerminationReason::InitializationError(
+                    "QuickJS runtime only supports JavaScript code".to_string(),
+                )
+            })?;
+            ctx.eval::<(), _>(js_code)
                 .map_err(|e| TerminationReason::Exception(format!("Script evaluation failed: {}", e)))?;
 
             Ok::<(), TerminationReason>(())
@@ -879,7 +886,17 @@ impl Worker {
             runtime,
             context,
             aborted: Arc::new(AtomicBool::new(false)),
+            ops,
         })
+    }
+
+    /// Create a new worker with default operations (for testing)
+    pub async fn new(
+        script: Script,
+        limits: Option<RuntimeLimits>,
+    ) -> Result<Self, TerminationReason> {
+        let ops: OperationsHandle = Arc::new(DefaultOps);
+        Self::new_with_ops(script, limits, ops).await
     }
 
     /// Abort the worker execution
@@ -890,14 +907,14 @@ impl Worker {
     }
 
     /// Execute a task
-    pub async fn exec(&mut self, mut task: Task) -> Result<(), TerminationReason> {
+    pub async fn exec(&mut self, mut task: Event) -> Result<(), TerminationReason> {
         // Check if aborted before starting
         if self.aborted.load(Ordering::SeqCst) {
             return Err(TerminationReason::Aborted);
         }
 
         match &mut task {
-            Task::Fetch(init_opt) => {
+            Event::Fetch(init_opt) => {
                 let init = init_opt.take().ok_or_else(|| {
                     TerminationReason::Other("FetchInit already taken".to_string())
                 })?;
@@ -905,13 +922,27 @@ impl Worker {
                 let _ = init.res_tx.send(response);
                 Ok(())
             }
-            Task::Scheduled(init_opt) => {
+            Event::Task(init_opt) => {
                 let init = init_opt.take().ok_or_else(|| {
-                    TerminationReason::Other("ScheduledInit already taken".to_string())
+                    TerminationReason::Other("TaskInit already taken".to_string())
                 })?;
-                self.handle_scheduled(init.time).await?;
-                let _ = init.res_tx.send(());
-                Ok(())
+
+                // Extract scheduled time from source
+                let scheduled_time = match &init.source {
+                    Some(openworkers_core::TaskSource::Schedule { time }) => *time,
+                    _ => 0,
+                };
+
+                match self.handle_scheduled(scheduled_time).await {
+                    Ok(()) => {
+                        let _ = init.res_tx.send(TaskResult::success());
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let _ = init.res_tx.send(TaskResult::err(e.to_string()));
+                        Err(e)
+                    }
+                }
             }
         }
     }
@@ -926,6 +957,10 @@ impl Worker {
             let body_str = match &request.body {
                 RequestBody::Bytes(b) => String::from_utf8_lossy(b).to_string(),
                 RequestBody::None => String::new(),
+                RequestBody::Stream(_) => {
+                    // TODO: Handle streaming body
+                    String::new()
+                }
             };
 
             let dispatch_code = format!(
@@ -1073,15 +1108,11 @@ impl Worker {
 }
 
 impl openworkers_core::Worker for Worker {
-    async fn new(
-        script: Script,
-        log_tx: Option<LogSender>,
-        limits: Option<RuntimeLimits>,
-    ) -> Result<Self, TerminationReason> {
-        Worker::new(script, log_tx, limits).await
+    async fn new(script: Script, limits: Option<RuntimeLimits>) -> Result<Self, TerminationReason> {
+        Worker::new(script, limits).await
     }
 
-    async fn exec(&mut self, task: Task) -> Result<(), TerminationReason> {
+    async fn exec(&mut self, task: Event) -> Result<(), TerminationReason> {
         Worker::exec(self, task).await
     }
 

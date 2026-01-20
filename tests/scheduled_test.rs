@@ -1,4 +1,4 @@
-use openworkers_core::{Script, Task};
+use openworkers_core::{Event, Script};
 use openworkers_runtime_quickjs::Worker;
 
 #[tokio::test]
@@ -12,14 +12,15 @@ async fn test_scheduled_basic() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
-    let (task, rx) = Task::scheduled(1234567890);
+    let (task, rx) = Event::from_schedule("test-task-1".to_string(), 1234567890);
     worker.exec(task).await.expect("Task should execute");
 
-    rx.await.expect("Should receive result");
+    let task_result = rx.await.expect("Should receive result");
+    assert!(task_result.success);
 }
 
 #[tokio::test]
@@ -31,14 +32,15 @@ async fn test_scheduled_with_time() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
-    let (task, rx) = Task::scheduled(1700000000000);
+    let (task, rx) = Event::from_schedule("test-task-2".to_string(), 1700000000000);
     worker.exec(task).await.expect("Task should execute");
 
-    rx.await.expect("Should receive result");
+    let task_result = rx.await.expect("Should receive result");
+    assert!(task_result.success);
 }
 
 #[tokio::test]
@@ -52,14 +54,15 @@ async fn test_scheduled_async_handler() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
-    let (task, rx) = Task::scheduled(1700000000000);
+    let (task, rx) = Event::from_schedule("test-task-3".to_string(), 1700000000000);
     worker.exec(task).await.expect("Task should execute");
 
-    rx.await.expect("Should receive result");
+    let task_result = rx.await.expect("Should receive result");
+    assert!(task_result.success);
 }
 
 #[tokio::test]
@@ -71,14 +74,15 @@ async fn test_scheduled_wait_until() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
-    let (task, rx) = Task::scheduled(1700000000000);
+    let (task, rx) = Event::from_schedule("test-task-4".to_string(), 1700000000000);
     worker.exec(task).await.expect("Task should execute");
 
-    rx.await.expect("Should receive result");
+    let task_result = rx.await.expect("Should receive result");
+    assert!(task_result.success);
 }
 
 #[tokio::test]
@@ -98,14 +102,15 @@ async fn test_scheduled_multiple_handlers() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
-    let (task, rx) = Task::scheduled(1700000000000);
+    let (task, rx) = Event::from_schedule("test-task-5".to_string(), 1700000000000);
     worker.exec(task).await.expect("Task should execute");
 
-    rx.await.expect("Should receive result");
+    let task_result = rx.await.expect("Should receive result");
+    assert!(task_result.success);
 }
 
 #[tokio::test]
@@ -125,12 +130,13 @@ async fn test_scheduled_event_properties() {
     "#;
 
     let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None, None)
+    let mut worker = Worker::new(script_obj, None)
         .await
         .expect("Worker should initialize");
 
-    let (task, rx) = Task::scheduled(1700000000000);
+    let (task, rx) = Event::from_schedule("test-task-6".to_string(), 1700000000000);
     worker.exec(task).await.expect("Task should execute");
 
-    rx.await.expect("Should receive result");
+    let task_result = rx.await.expect("Should receive result");
+    assert!(task_result.success);
 }
