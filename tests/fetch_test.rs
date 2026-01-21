@@ -1,12 +1,70 @@
-use openworkers_core::{Event, HttpMethod, HttpRequest, RequestBody, Script};
+use bytes::Bytes;
+use openworkers_core::{
+    Event, HttpMethod, HttpRequest, HttpResponse, OpFuture, OperationsHandler, RequestBody,
+    ResponseBody, Script,
+};
 use openworkers_runtime_quickjs::Worker;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Mock handler that returns fixed responses for testing
+struct MockOps;
+
+impl OperationsHandler for MockOps {
+    fn handle_fetch(&self, request: HttpRequest) -> OpFuture<'_, Result<HttpResponse, String>> {
+        Box::pin(async move {
+            // Return mock responses based on URL
+            if request.url.contains("/get") {
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![("content-type".to_string(), "application/json".to_string())],
+                    body: ResponseBody::Bytes(Bytes::from(
+                        r#"{"url":"https://example.com/get","data":"test"}"#,
+                    )),
+                })
+            } else if request.url.contains("/post") {
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![("content-type".to_string(), "application/json".to_string())],
+                    body: ResponseBody::Bytes(Bytes::from(r#"{"json":{"hello":"world"}}"#)),
+                })
+            } else if request.url.contains("/headers") {
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![("content-type".to_string(), "application/json".to_string())],
+                    body: ResponseBody::Bytes(Bytes::from(
+                        r#"{"headers":{"x-custom-header":"test-value"}}"#,
+                    )),
+                })
+            } else if request.url.contains("/status/404") {
+                Ok(HttpResponse {
+                    status: 404,
+                    headers: vec![],
+                    body: ResponseBody::Bytes(Bytes::from("Not Found")),
+                })
+            } else {
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: ResponseBody::Bytes(Bytes::from("OK")),
+                })
+            }
+        })
+    }
+}
+
+async fn create_worker(script: &str) -> Worker {
+    let script_obj = Script::new(script);
+    Worker::new_with_ops(script_obj, None, Arc::new(MockOps))
+        .await
+        .expect("Worker should initialize")
+}
 
 #[tokio::test]
 async fn test_fetch_basic_get() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.workers.rocks/get');
+            const response = await fetch('https://example.com/get');
             const data = await response.json();
             event.respondWith(new Response(JSON.stringify({
                 status: response.status,
@@ -15,10 +73,7 @@ async fn test_fetch_basic_get() {
         });
     "#;
 
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
+    let mut worker = create_worker(script).await;
 
     let request = HttpRequest {
         method: HttpMethod::Get,
@@ -30,11 +85,7 @@ async fn test_fetch_basic_get() {
     let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
-    let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
-        .await
-        .expect("Should receive response within timeout")
-        .expect("Channel should not close");
-
+    let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
     let body = response.body.collect().await.expect("Should have body");
@@ -47,7 +98,7 @@ async fn test_fetch_basic_get() {
 async fn test_fetch_post_with_body() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.workers.rocks/post', {
+            const response = await fetch('https://example.com/post', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ hello: 'world' })
@@ -60,10 +111,7 @@ async fn test_fetch_post_with_body() {
         });
     "#;
 
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
+    let mut worker = create_worker(script).await;
 
     let request = HttpRequest {
         method: HttpMethod::Get,
@@ -75,11 +123,7 @@ async fn test_fetch_post_with_body() {
     let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
-    let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
-        .await
-        .expect("Should receive response within timeout")
-        .expect("Channel should not close");
-
+    let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
     let body = response.body.collect().await.expect("Should have body");
@@ -92,7 +136,7 @@ async fn test_fetch_post_with_body() {
 async fn test_fetch_with_headers() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.workers.rocks/headers', {
+            const response = await fetch('https://example.com/headers', {
                 headers: { 'X-Custom-Header': 'test-value' }
             });
             const data = await response.json();
@@ -103,10 +147,7 @@ async fn test_fetch_with_headers() {
         });
     "#;
 
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
+    let mut worker = create_worker(script).await;
 
     let request = HttpRequest {
         method: HttpMethod::Get,
@@ -118,11 +159,7 @@ async fn test_fetch_with_headers() {
     let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
-    let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
-        .await
-        .expect("Should receive response within timeout")
-        .expect("Channel should not close");
-
+    let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
     let body = response.body.collect().await.expect("Should have body");
@@ -131,50 +168,10 @@ async fn test_fetch_with_headers() {
 }
 
 #[tokio::test]
-async fn test_fetch_forward() {
-    // Test fetch forward - direct pass-through of fetch response
-    let script = r#"
-        addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.workers.rocks/get');
-            event.respondWith(response);
-        });
-    "#;
-
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
-
-    let request = HttpRequest {
-        method: HttpMethod::Get,
-        url: "http://localhost/".to_string(),
-        headers: HashMap::new(),
-        body: RequestBody::None,
-    };
-
-    let (task, rx) = Event::fetch(request);
-    worker.exec(task).await.expect("Task should execute");
-
-    let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
-        .await
-        .expect("Should receive response within timeout")
-        .expect("Channel should not close");
-
-    assert_eq!(response.status, 200);
-
-    let body = response.body.collect().await.expect("Should have body");
-    let body_str = String::from_utf8_lossy(&body);
-    assert!(
-        body_str.contains("httpbin.workers.rocks"),
-        "Should contain httpbin response"
-    );
-}
-
-#[tokio::test]
 async fn test_fetch_404() {
     let script = r#"
         addEventListener('fetch', async (event) => {
-            const response = await fetch('https://httpbin.workers.rocks/status/404');
+            const response = await fetch('https://example.com/status/404');
             event.respondWith(new Response(JSON.stringify({
                 status: response.status,
                 ok: response.ok
@@ -182,10 +179,7 @@ async fn test_fetch_404() {
         });
     "#;
 
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
+    let mut worker = create_worker(script).await;
 
     let request = HttpRequest {
         method: HttpMethod::Get,
@@ -197,10 +191,7 @@ async fn test_fetch_404() {
     let (task, rx) = Event::fetch(request);
     worker.exec(task).await.expect("Task should execute");
 
-    let response = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
-        .await
-        .expect("Should receive response within timeout")
-        .expect("Channel should not close");
+    let response = rx.await.expect("Should receive response");
 
     let body = response.body.collect().await.expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");

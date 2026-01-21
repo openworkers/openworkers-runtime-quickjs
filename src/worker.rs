@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use openworkers_core::{
-    DefaultOps, Event, HttpRequest, HttpResponse, LogLevel, OperationsHandle, RequestBody,
-    ResponseBody, RuntimeLimits, Script, TaskResult, TerminationReason,
+    Event, HttpRequest, HttpResponse, LogLevel, OperationsHandle, RequestBody, ResponseBody,
+    RuntimeLimits, Script, TaskResult, TerminationReason,
 };
 use rquickjs::{
     AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async, promise::Promise,
@@ -715,26 +715,28 @@ const RUNTIME_JS: &str = r#"
     };
 "#;
 
-/// Native fetch implementation
-async fn native_fetch(options_json: String) -> String {
-    #[derive(serde::Deserialize)]
-    struct FetchOptions {
-        url: String,
-        method: String,
-        headers: HashMap<String, String>,
-        body: Option<String>,
-    }
+/// Fetch options from JS
+#[derive(serde::Deserialize)]
+struct FetchOptions {
+    url: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+}
 
-    #[derive(serde::Serialize)]
-    struct FetchResult {
-        status: u16,
-        #[serde(rename = "statusText")]
-        status_text: String,
-        headers: HashMap<String, String>,
-        body: String,
-        error: Option<String>,
-    }
+/// Fetch result for JS
+#[derive(serde::Serialize)]
+struct FetchResult {
+    status: u16,
+    #[serde(rename = "statusText")]
+    status_text: String,
+    headers: HashMap<String, String>,
+    body: String,
+    error: Option<String>,
+}
 
+/// Native fetch implementation using OperationsHandle
+async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
     let options: FetchOptions = match serde_json::from_str(&options_json) {
         Ok(o) => o,
         Err(e) => {
@@ -749,72 +751,71 @@ async fn native_fetch(options_json: String) -> String {
         }
     };
 
-    let client = reqwest::Client::new();
-
-    let mut request = match options.method.as_str() {
-        "GET" => client.get(&options.url),
-        "POST" => client.post(&options.url),
-        "PUT" => client.put(&options.url),
-        "DELETE" => client.delete(&options.url),
-        "PATCH" => client.patch(&options.url),
-        "HEAD" => client.head(&options.url),
-        _ => client.get(&options.url),
+    // Convert to HttpRequest for OperationsHandle
+    let method = match options.method.as_str() {
+        "GET" => openworkers_core::HttpMethod::Get,
+        "POST" => openworkers_core::HttpMethod::Post,
+        "PUT" => openworkers_core::HttpMethod::Put,
+        "DELETE" => openworkers_core::HttpMethod::Delete,
+        "PATCH" => openworkers_core::HttpMethod::Patch,
+        "HEAD" => openworkers_core::HttpMethod::Head,
+        "OPTIONS" => openworkers_core::HttpMethod::Options,
+        _ => openworkers_core::HttpMethod::Get,
     };
 
-    // Add headers
-    for (key, value) in &options.headers {
-        request = request.header(key, value);
-    }
+    let body = match options.body {
+        Some(b) => RequestBody::Bytes(Bytes::from(b)),
+        None => RequestBody::None,
+    };
 
-    // Add body if present
-    if let Some(body) = options.body {
-        request = request.body(body);
-    }
+    let request = HttpRequest {
+        method,
+        url: options.url,
+        headers: options.headers,
+        body,
+    };
 
-    // Execute request
-    match request.send().await {
+    // Call ops.handle_fetch()
+    match ops.handle_fetch(request).await {
         Ok(response) => {
-            let status = response.status().as_u16();
-            let status_text = response
-                .status()
-                .canonical_reason()
-                .unwrap_or("OK")
-                .to_string();
+            // Collect body
+            let body = match response.body.collect().await {
+                Some(b) => String::from_utf8_lossy(&b).to_string(),
+                None => String::new(),
+            };
 
-            // Extract headers
-            let mut headers = HashMap::new();
-            for (key, value) in response.headers() {
-                if let Ok(v) = value.to_str() {
-                    headers.insert(key.to_string(), v.to_string());
-                }
-            }
+            // Convert headers from Vec to HashMap
+            let headers: HashMap<String, String> = response.headers.into_iter().collect();
 
-            // Get body
-            match response.text().await {
-                Ok(body) => serde_json::to_string(&FetchResult {
-                    status,
-                    status_text,
-                    headers,
-                    body,
-                    error: None,
-                })
-                .unwrap(),
-                Err(e) => serde_json::to_string(&FetchResult {
-                    status: 0,
-                    status_text: String::new(),
-                    headers: HashMap::new(),
-                    body: String::new(),
-                    error: Some(format!("Failed to read response body: {}", e)),
-                })
-                .unwrap(),
+            // Generate status text from status code
+            let status_text = match response.status {
+                200 => "OK",
+                201 => "Created",
+                204 => "No Content",
+                400 => "Bad Request",
+                401 => "Unauthorized",
+                403 => "Forbidden",
+                404 => "Not Found",
+                500 => "Internal Server Error",
+                _ => "OK",
             }
+            .to_string();
+
+            serde_json::to_string(&FetchResult {
+                status: response.status,
+                status_text,
+                headers,
+                body,
+                error: None,
+            })
+            .unwrap()
         }
         Err(e) => serde_json::to_string(&FetchResult {
             status: 0,
             status_text: String::new(),
             headers: HashMap::new(),
             body: String::new(),
-            error: Some(format!("Fetch failed: {}", e)),
+            error: Some(e),
         })
         .unwrap(),
     }
@@ -850,6 +851,7 @@ impl Worker {
         let ops_error = ops.clone();
         let ops_info = ops.clone();
         let ops_debug = ops.clone();
+        let ops_fetch = ops.clone();
 
         // Initialize runtime bindings and evaluate script
         async_with!(context => |ctx| {
@@ -881,8 +883,13 @@ impl Worker {
             }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.debug: {}", e)))?;
             global.set("__console_debug", debug_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_debug: {}", e)))?;
 
-            // Setup native fetch function (returns a Promise)
-            let fetch_fn = Function::new(ctx.clone(), Async(native_fetch))
+            // Setup native fetch function that uses OperationsHandle
+            let fetch_fn = Function::new(ctx.clone(), Async(move |options_json: String| {
+                let ops = ops_fetch.clone();
+                async move {
+                    do_fetch(ops, options_json).await
+                }
+            }))
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to create fetch function: {}", e)))?;
             global.set("__native_fetch", fetch_fn)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to set __native_fetch: {}", e)))?;
@@ -913,11 +920,14 @@ impl Worker {
     }
 
     /// Create a new worker with default operations (for testing)
+    /// Create a new worker with DefaultOps (stubs)
+    ///
+    /// For real fetch support, use `new_with_ops()` with a custom OperationsHandler.
     pub async fn new(
         script: Script,
         limits: Option<RuntimeLimits>,
     ) -> Result<Self, TerminationReason> {
-        let ops: OperationsHandle = Arc::new(DefaultOps);
+        let ops: OperationsHandle = Arc::new(openworkers_core::DefaultOps);
         Self::new_with_ops(script, limits, ops).await
     }
 

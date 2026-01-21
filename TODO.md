@@ -2,7 +2,7 @@
 
 ## High Priority
 
-- [ ] **Wire fetch() to OperationsHandle** — Currently uses rquickjs built-in, runner can't intercept
+- [x] **Wire fetch() to OperationsHandle** — Runner can now intercept fetch via handle_fetch()
 - [x] **Wire console to OperationsHandle** — Runner can now collect logs via handle_log()
 - [ ] **ES Modules support** — `export default { fetch() {} }` style handlers
 

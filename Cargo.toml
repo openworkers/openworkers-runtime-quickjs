@@ -24,7 +24,6 @@ serde_json = "1.0"
 
 # HTTP types
 bytes = { version = "1.11", features = ["serde"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Streaming
 futures = "0.3"
@@ -41,6 +40,3 @@ path = "examples/hello_world.rs"
 name = "async_test"
 path = "examples/async_test.rs"
 
-[[example]]
-name = "test_fetch"
-path = "examples/test_fetch.rs"
