@@ -511,7 +511,9 @@ const RUNTIME_JS: &str = r#"
             }
 
             if (this._body instanceof Uint8Array) {
-                return this._body.buffer;
+                // Slice, or a view over part of a buffer would hand out the whole buffer
+                const bytes = this._body;
+                return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
             }
             const encoder = new TextEncoder();
             const text = typeof this._body === 'string' ? this._body : String(this._body);

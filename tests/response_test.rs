@@ -65,6 +65,36 @@ async fn test_string_body_still_works() {
 }
 
 #[tokio::test]
+async fn test_array_buffer_keeps_the_bounds_of_a_view() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            const view = new Uint8Array([1, 2, 3, 4, 5]).subarray(1, 3);
+            const buffer = await new Response(view).arrayBuffer();
+            event.respondWith(new Response(new Uint8Array(buffer)));
+        });
+    "#;
+
+    let mut worker = Worker::new(Script::new(script), None)
+        .await
+        .expect("Worker should initialize");
+
+    let request = HttpRequest {
+        method: HttpMethod::Get,
+        url: "http://localhost/".to_string(),
+        headers: HashMap::new(),
+        body: RequestBody::None,
+    };
+
+    let (task, rx) = Event::fetch(request);
+    worker.exec(task).await.expect("Task should execute");
+
+    let response = rx.await.expect("Should receive response");
+    let body = response.body.collect().await.expect("Should have body");
+
+    assert_eq!(body, [2, 3].as_slice());
+}
+
+#[tokio::test]
 async fn test_status_text_defaults_to_empty() {
     let body = respond_with(
         "JSON.stringify([
