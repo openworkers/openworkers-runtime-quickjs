@@ -96,6 +96,10 @@ const RUNTIME_JS: &str = r#"
                     for (const [key, value] of init.entries()) {
                         this._headers[key.toLowerCase()] = value;
                     }
+                } else if (Array.isArray(init)) {
+                    for (const [key, value] of init) {
+                        this.append(key, value);
+                    }
                 } else if (typeof init === 'object') {
                     for (const key in init) {
                         this._headers[key.toLowerCase()] = init[key];
@@ -771,13 +775,13 @@ struct FetchOptions {
     body: Option<String>,
 }
 
-/// Fetch result for JS
+/// Fetch result for JS; headers are name/value pairs so duplicates survive.
 #[derive(serde::Serialize)]
 struct FetchResult {
     status: u16,
     #[serde(rename = "statusText")]
     status_text: String,
-    headers: HashMap<String, String>,
+    headers: Vec<(String, String)>,
     body: String,
     error: Option<String>,
 }
@@ -790,7 +794,7 @@ async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
             return serde_json::to_string(&FetchResult {
                 status: 0,
                 status_text: String::new(),
-                headers: HashMap::new(),
+                headers: Vec::new(),
                 body: String::new(),
                 error: Some(format!("Invalid fetch options: {}", e)),
             })
@@ -831,9 +835,6 @@ async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
                 None => String::new(),
             };
 
-            // Convert headers from Vec to HashMap
-            let headers: HashMap<String, String> = response.headers.into_iter().collect();
-
             // Generate status text from status code
             let status_text = match response.status {
                 200 => "OK",
@@ -851,7 +852,7 @@ async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
             serde_json::to_string(&FetchResult {
                 status: response.status,
                 status_text,
-                headers,
+                headers: response.headers,
                 body,
                 error: None,
             })
@@ -860,7 +861,7 @@ async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
         Err(e) => serde_json::to_string(&FetchResult {
             status: 0,
             status_text: String::new(),
-            headers: HashMap::new(),
+            headers: Vec::new(),
             body: String::new(),
             error: Some(e),
         })
