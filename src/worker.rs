@@ -1090,8 +1090,9 @@ impl Worker {
                 RequestBody::Bytes(b) => String::from_utf8_lossy(b).to_string(),
                 RequestBody::None => String::new(),
                 RequestBody::Stream(_) => {
-                    // TODO: Handle streaming body
-                    String::new()
+                    return Err(TerminationReason::Other(
+                        "Streaming request bodies are not supported".to_string(),
+                    ));
                 }
             };
 
