@@ -549,29 +549,6 @@ const RUNTIME_JS: &str = r#"
         }
     };
 
-    // TextEncoder/TextDecoder
-    globalThis.TextEncoder = class TextEncoder {
-        encode(str) {
-            const utf8 = unescape(encodeURIComponent(str));
-            const result = new Uint8Array(utf8.length);
-            for (let i = 0; i < utf8.length; i++) {
-                result[i] = utf8.charCodeAt(i);
-            }
-            return result;
-        }
-    };
-
-    globalThis.TextDecoder = class TextDecoder {
-        decode(bytes) {
-            if (!bytes) return '';
-            let str = '';
-            for (let i = 0; i < bytes.length; i++) {
-                str += String.fromCharCode(bytes[i]);
-            }
-            return decodeURIComponent(escape(str));
-        }
-    };
-
     // FetchEvent class
     class FetchEvent {
         constructor(request) {
@@ -898,6 +875,9 @@ impl Worker {
 
             crate::runtime::setup_timers(&ctx)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup timers: {}", e)))?;
+
+            crate::runtime::setup_text(&ctx)
+                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup text encoding: {}", e)))?;
 
             // Evaluate runtime bindings
             ctx.eval::<(), _>(RUNTIME_JS)
