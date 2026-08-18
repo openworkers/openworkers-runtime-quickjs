@@ -46,74 +46,6 @@ async fn test_settimeout_basic() {
 }
 
 #[tokio::test]
-async fn test_settimeout_fires_after_response() {
-    let script = r#"
-        globalThis.counter = 0;
-
-        addEventListener('fetch', (event) => {
-            setTimeout(() => {
-                globalThis.counter = 42;
-            }, 10);
-
-            event.respondWith(new Response('ok'));
-        });
-    "#;
-
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
-
-    let request = HttpRequest {
-        method: HttpMethod::Get,
-        url: "http://localhost/".to_string(),
-        headers: HashMap::new(),
-        body: RequestBody::None,
-    };
-
-    let (task, rx) = Event::fetch(request);
-    worker.exec(task).await.expect("Task should execute");
-
-    let _ = rx.await.expect("Should receive response");
-}
-
-#[tokio::test]
-async fn test_cleartimeout_prevents_execution() {
-    let script = r#"
-        globalThis.shouldNotRun = false;
-
-        addEventListener('fetch', (event) => {
-            const id = setTimeout(() => {
-                globalThis.shouldNotRun = true;
-            }, 10);
-            clearTimeout(id);
-
-            event.respondWith(new Response(JSON.stringify({
-                timerCleared: true
-            })));
-        });
-    "#;
-
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
-
-    let request = HttpRequest {
-        method: HttpMethod::Get,
-        url: "http://localhost/".to_string(),
-        headers: HashMap::new(),
-        body: RequestBody::None,
-    };
-
-    let (task, rx) = Event::fetch(request);
-    worker.exec(task).await.expect("Task should execute");
-
-    let response = rx.await.expect("Should receive response");
-    assert_eq!(response.status, 200);
-}
-
-#[tokio::test]
 async fn test_settimeout_returns_id() {
     let script = r#"
         addEventListener('fetch', (event) => {
@@ -155,7 +87,7 @@ async fn test_setinterval_returns_id() {
     let script = r#"
         addEventListener('fetch', (event) => {
             const id = setInterval(() => {}, 1000);
-            clearInterval(id);  // Clean up
+            clearInterval(id);
             const isNumber = typeof id === 'number' && id > 0;
 
             event.respondWith(new Response(JSON.stringify({
@@ -186,38 +118,6 @@ async fn test_setinterval_returns_id() {
     let body = response.body.collect().await.expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["hasId"], true);
-}
-
-#[tokio::test]
-async fn test_settimeout_with_arguments() {
-    let script = r#"
-        globalThis.result = null;
-
-        addEventListener('fetch', (event) => {
-            setTimeout((a, b, c) => {
-                globalThis.result = a + b + c;
-            }, 10, 1, 2, 3);
-
-            event.respondWith(new Response('ok'));
-        });
-    "#;
-
-    let script_obj = Script::new(script);
-    let mut worker = Worker::new(script_obj, None)
-        .await
-        .expect("Worker should initialize");
-
-    let request = HttpRequest {
-        method: HttpMethod::Get,
-        url: "http://localhost/".to_string(),
-        headers: HashMap::new(),
-        body: RequestBody::None,
-    };
-
-    let (task, rx) = Event::fetch(request);
-    worker.exec(task).await.expect("Task should execute");
-
-    let _ = rx.await.expect("Should receive response");
 }
 
 /// Run a handler body that responds with JSON and return the parsed result

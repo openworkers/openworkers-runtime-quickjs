@@ -863,7 +863,6 @@ impl Worker {
             global.set("__native_fetch", fetch_fn)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to set __native_fetch: {}", e)))?;
 
-            // Setup crypto global
             crate::runtime::setup_crypto(&ctx)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup crypto: {}", e)))?;
 

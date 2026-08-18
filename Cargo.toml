@@ -30,8 +30,3 @@ ring = "0.17"
 uuid = { version = "1.17", features = ["v4"] }
 url = "2.5.8"
 base64 = "0.22"
-
-[[example]]
-name = "hello_world"
-path = "examples/hello_world.rs"
-

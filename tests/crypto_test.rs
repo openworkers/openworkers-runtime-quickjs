@@ -47,16 +47,12 @@ async fn test_crypto_get_random_values() {
         addEventListener('fetch', (event) => {
             const array = new Uint8Array(16);
 
-            // Check all zeros initially
             const allZerosBefore = array.every(b => b === 0);
 
-            // Fill with random values
             const result = crypto.getRandomValues(array);
 
-            // Check that we got the same array back
             const sameArray = result === array;
 
-            // Check that at least some values are non-zero (very unlikely all zeros)
             const hasNonZero = array.some(b => b !== 0);
 
             event.respondWith(new Response(JSON.stringify({
@@ -102,7 +98,6 @@ async fn test_crypto_subtle_digest_sha256() {
             const hashBuffer = await crypto.subtle.digest('SHA-256', data);
             const hashArray = new Uint8Array(hashBuffer);
 
-            // Convert to hex
             const hashHex = Array.from(hashArray)
                 .map(b => b.toString(16).padStart(2, '0'))
                 .join('');
@@ -140,7 +135,7 @@ async fn test_crypto_subtle_digest_sha256() {
     let body = response.body.collect().await.expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["matches"], true);
-    assert_eq!(json["length"], 32); // SHA-256 is 32 bytes
+    assert_eq!(json["length"], 32);
 }
 
 #[tokio::test]
@@ -151,7 +146,6 @@ async fn test_crypto_subtle_digest_sha1() {
             const hashBuffer = await crypto.subtle.digest('SHA-1', data);
             const hashArray = new Uint8Array(hashBuffer);
 
-            // Convert to hex
             const hashHex = Array.from(hashArray)
                 .map(b => b.toString(16).padStart(2, '0'))
                 .join('');
@@ -189,7 +183,7 @@ async fn test_crypto_subtle_digest_sha1() {
     let body = response.body.collect().await.expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["matches"], true);
-    assert_eq!(json["length"], 20); // SHA-1 is 20 bytes
+    assert_eq!(json["length"], 20);
 }
 
 #[tokio::test]
@@ -226,5 +220,5 @@ async fn test_crypto_subtle_digest_sha512() {
 
     let body = response.body.collect().await.expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
-    assert_eq!(json["length"], 64); // SHA-512 is 64 bytes
+    assert_eq!(json["length"], 64);
 }
