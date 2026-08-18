@@ -1086,13 +1086,9 @@ impl Worker {
     /// Handle a fetch event
     async fn handle_fetch(&self, request: HttpRequest) -> Result<HttpResponse, TerminationReason> {
         async_with!(self.context => |ctx| {
-            // Build request object for JS
-            let headers_json: String = serde_json::to_string(&request.headers)
-                .unwrap_or_else(|_| "{}".to_string());
-
-            let body_str = match &request.body {
-                RequestBody::Bytes(b) => String::from_utf8_lossy(b).to_string(),
-                RequestBody::None => String::new(),
+            let body = match &request.body {
+                RequestBody::Bytes(b) => Some(String::from_utf8_lossy(b).to_string()),
+                RequestBody::None => None,
                 RequestBody::Stream(_) => {
                     return Err(TerminationReason::Other(
                         "Streaming request bodies are not supported".to_string(),
@@ -1100,18 +1096,15 @@ impl Worker {
                 }
             };
 
-            let dispatch_code = format!(
-                r#"__dispatchFetch({{
-                    method: "{}",
-                    url: "{}",
-                    headers: {},
-                    body: {}
-                }})"#,
-                request.method,
-                request.url,
-                headers_json,
-                if body_str.is_empty() { "null".to_string() } else { format!("\"{}\"", body_str.replace("\"", "\\\"")) }
-            );
+            // JSON so that quotes and newlines in the url or body cannot break out of the literal
+            let request_json = serde_json::json!({
+                "method": request.method.to_string(),
+                "url": request.url,
+                "headers": request.headers,
+                "body": body,
+            });
+
+            let dispatch_code = format!("__dispatchFetch({})", request_json);
 
             // Dispatch and get response
             let promise: Promise = ctx.eval(dispatch_code.as_bytes())
