@@ -312,6 +312,22 @@ async fn test_interval_repeats_until_cleared() {
 }
 
 #[tokio::test]
+async fn test_out_of_range_delays_fire_immediately() {
+    let result = respond(
+        "const fired = [];
+         await Promise.all([
+             new Promise(resolve => setTimeout(() => { fired.push('negative'); resolve(); }, -1)),
+             new Promise(resolve => setTimeout(() => { fired.push('nan'); resolve(); }, NaN)),
+             new Promise(resolve => setTimeout(() => { fired.push('string'); resolve(); }, '0')),
+         ]);
+         event.respondWith(new Response(JSON.stringify(fired.sort())));",
+    )
+    .await;
+
+    assert_eq!(result, serde_json::json!(["nan", "negative", "string"]));
+}
+
+#[tokio::test]
 async fn test_timer_arguments_reach_the_callback() {
     let result = respond(
         "const sum = await new Promise(resolve => setTimeout((a, b, c) => resolve(a + b + c), 5, 1, 2, 3));

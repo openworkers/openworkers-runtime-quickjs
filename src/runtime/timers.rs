@@ -8,8 +8,9 @@ use std::time::Duration;
 pub fn setup_timers(ctx: &Ctx<'_>) -> Result<()> {
     let sleep = Function::new(
         ctx.clone(),
-        Async(|delay: u64| async move {
-            tokio::time::sleep(Duration::from_millis(delay)).await;
+        Async(|delay: f64| async move {
+            // Saturating cast, so a past deadline or an absurd delay clamps instead of throwing
+            tokio::time::sleep(Duration::from_millis(delay as u64)).await;
         }),
     )?;
     ctx.globals().set("__sleep", sleep)?;
@@ -26,9 +27,10 @@ const TIMERS_JS: &str = r#"
 
         function schedule(callback, delay, args, repeat) {
             const id = nextId++;
+            const ms = Number(delay) || 0;
             timers.set(id, { callback, args });
 
-            const arm = () => __sleep(delay).then(() => {
+            const arm = () => __sleep(ms).then(() => {
                 const timer = timers.get(id);
 
                 if (!timer) {
@@ -56,11 +58,11 @@ const TIMERS_JS: &str = r#"
         }
 
         globalThis.setTimeout = function setTimeout(callback, delay, ...args) {
-            return schedule(callback, delay || 0, args, false);
+            return schedule(callback, delay, args, false);
         };
 
         globalThis.setInterval = function setInterval(callback, delay, ...args) {
-            return schedule(callback, delay || 0, args, true);
+            return schedule(callback, delay, args, true);
         };
 
         globalThis.clearTimeout = function clearTimeout(id) {
