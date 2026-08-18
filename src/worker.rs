@@ -4,7 +4,8 @@ use openworkers_core::{
     RuntimeLimits, Script, TaskResult, TerminationReason,
 };
 use rquickjs::{
-    AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async, promise::Promise,
+    Array, AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async,
+    promise::Promise,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -87,61 +88,64 @@ const RUNTIME_JS: &str = r#"
         }
     };
 
-    // Headers class
+    // Headers class; entries are kept as a list so duplicates (Set-Cookie) survive
     globalThis.Headers = class Headers {
         constructor(init) {
-            this._headers = {};
-            if (init) {
-                if (init instanceof Headers) {
-                    for (const [key, value] of init.entries()) {
-                        this._headers[key.toLowerCase()] = value;
-                    }
-                } else if (Array.isArray(init)) {
-                    for (const [key, value] of init) {
-                        this.append(key, value);
-                    }
-                } else if (typeof init === 'object') {
-                    for (const key in init) {
-                        this._headers[key.toLowerCase()] = init[key];
-                    }
+            this._list = [];
+            if (init instanceof Headers) {
+                for (const [name, value] of init._list) {
+                    this._list.push([name, value]);
+                }
+            } else if (Array.isArray(init)) {
+                for (const [name, value] of init) {
+                    this.append(name, value);
+                }
+            } else if (init && typeof init === 'object') {
+                for (const name in init) {
+                    this.append(name, init[name]);
                 }
             }
         }
 
         get(name) {
-            return this._headers[name.toLowerCase()] || null;
+            const key = String(name).toLowerCase();
+            const values = this._list.filter(e => e[0] === key).map(e => e[1]);
+            return values.length > 0 ? values.join(', ') : null;
         }
 
         set(name, value) {
-            this._headers[name.toLowerCase()] = value;
+            const key = String(name).toLowerCase();
+            this._list = this._list.filter(e => e[0] !== key);
+            this._list.push([key, String(value)]);
         }
 
         has(name) {
-            return name.toLowerCase() in this._headers;
+            const key = String(name).toLowerCase();
+            return this._list.some(e => e[0] === key);
         }
 
         delete(name) {
-            delete this._headers[name.toLowerCase()];
+            const key = String(name).toLowerCase();
+            this._list = this._list.filter(e => e[0] !== key);
         }
 
         append(name, value) {
-            const key = name.toLowerCase();
-            if (this._headers[key]) {
-                this._headers[key] += ', ' + value;
-            } else {
-                this._headers[key] = value;
-            }
+            this._list.push([String(name).toLowerCase(), String(value)]);
+        }
+
+        getSetCookie() {
+            return this._list.filter(e => e[0] === 'set-cookie').map(e => e[1]);
         }
 
         *entries() {
-            for (const key in this._headers) {
-                yield [key, this._headers[key]];
+            for (const [name, value] of this._list) {
+                yield [name, value];
             }
         }
 
         forEach(callback) {
-            for (const key in this._headers) {
-                callback(this._headers[key], key, this);
+            for (const [name, value] of this._list) {
+                callback(value, name, this);
             }
         }
     };
@@ -1120,17 +1124,16 @@ impl Worker {
             let status: i32 = response.get("status")
                 .map_err(|e| TerminationReason::Exception(format!("Failed to get status: {}", e)))?;
 
-            // Extract headers as Vec<(String, String)>
-            let mut headers = Vec::new();
+            let mut headers: Vec<(String, String)> = Vec::new();
             if let Ok(headers_obj) = response.get::<_, Object>("headers") {
-                if let Ok(internal) = headers_obj.get::<_, Object>("_headers") {
-                    for key in internal.keys::<String>() {
-                        if let Ok(key) = key {
-                            if let Ok(value) = internal.get::<_, String>(&key) {
-                                headers.push((key, value));
-                            }
-                        }
-                    }
+                let entries = headers_obj.get::<_, Vec<Array>>("_list").unwrap_or_default();
+
+                for entry in entries {
+                    let (Ok(name), Ok(value)) = (entry.get::<String>(0), entry.get::<String>(1)) else {
+                        continue;
+                    };
+
+                    headers.push((name, value));
                 }
             }
 
