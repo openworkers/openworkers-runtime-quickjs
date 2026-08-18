@@ -79,8 +79,38 @@ pub fn setup_crypto(ctx: &Ctx<'_>) -> Result<()> {
         r#"
         (function() {
             const _native = crypto._getRandomValues;
+            const QUOTA = 65536;
+
+            // The views the spec allows; the float ones and DataView are rejected
+            const integerViews = [
+                globalThis.Int8Array,
+                globalThis.Uint8Array,
+                globalThis.Uint8ClampedArray,
+                globalThis.Int16Array,
+                globalThis.Uint16Array,
+                globalThis.Int32Array,
+                globalThis.Uint32Array,
+                globalThis.BigInt64Array,
+                globalThis.BigUint64Array
+            ].filter(Boolean);
+
             crypto.getRandomValues = function(array) {
-                _native(array);
+                if (!integerViews.some(view => array instanceof view)) {
+                    throw new DOMException(
+                        'crypto.getRandomValues expects an integer TypedArray',
+                        'TypeMismatchError'
+                    );
+                }
+
+                if (array.byteLength > QUOTA) {
+                    throw new DOMException(
+                        'crypto.getRandomValues accepts at most ' + QUOTA + ' bytes',
+                        'QuotaExceededError'
+                    );
+                }
+
+                _native(new Uint8Array(array.buffer, array.byteOffset, array.byteLength));
+
                 return array;
             };
             delete crypto._getRandomValues;

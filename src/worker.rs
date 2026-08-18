@@ -41,6 +41,13 @@ const RUNTIME_JS: &str = r#"
         debug: (...args) => __console_debug(__formatArgs(args))
     };
 
+    globalThis.DOMException = class DOMException extends Error {
+        constructor(message, name) {
+            super(message);
+            this.name = name === undefined ? 'Error' : String(name);
+        }
+    };
+
     // Headers class; entries are kept as a list so duplicates (Set-Cookie) survive
     globalThis.Headers = class Headers {
         constructor(init) {
