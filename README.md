@@ -2,10 +2,12 @@
 
 Lightweight JavaScript runtime for serverless workers, built on [QuickJS](https://bellard.org/quickjs/).
 
+It implements `openworkers_core::Worker`, so it plugs into the runner the same way the other engines do.
+
 ## Quick Start
 
 ```rust
-use openworkers_runtime_quickjs::{Worker, Script, Event, HttpRequest, HttpMethod, RequestBody};
+use openworkers_runtime_quickjs::{Event, HttpMethod, HttpRequest, RequestBody, Script, Worker};
 use std::collections::HashMap;
 
 let script = Script::new(r#"
@@ -29,13 +31,24 @@ worker.exec(task).await?;
 let response = rx.await?;
 ```
 
-## Features
+`Worker::new` uses `DefaultOps`, which stubs `fetch()` out and prints logs to stderr.
+Pass your own `OperationsHandler` to `Worker::new_with_ops` to serve outbound requests
+and collect logs. A runnable version of the above is `cargo run --example hello_world`.
 
-- **Lightweight** — Small binary footprint (~200KB)
-- **Fast cold start** — Sub-millisecond worker creation
-- **Web APIs** — fetch, setTimeout, Response, Request, URL, console
-- **Async/await** — Full Promise support
-- **Streaming** — ReadableStream support
+## Implemented
+
+- `fetch` and `scheduled` events via `addEventListener`
+- console, `setTimeout`/`setInterval`, Headers, Request, Response, URL, TextEncoder/TextDecoder
+- `fetch()` and console delegated to the runner through `OperationsHandler`
+- `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.subtle.digest` (SHA-1/256/384/512)
+- ReadableStream response bodies, collected in the runtime before the response is sent
+
+## Not implemented
+
+- ES modules (`export default { fetch() {} }`)
+- Streaming request bodies (rejected with an error) and WebSocket
+- KV, storage, database and worker bindings
+- `RuntimeLimits`: the parameter is accepted and ignored
 
 ## Testing
 
