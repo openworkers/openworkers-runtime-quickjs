@@ -22,6 +22,8 @@ const RUNTIME_JS: &str = r#"
         scheduled: []
     };
 
+    globalThis.__pendingWork = [];
+
     // addEventListener implementation
     globalThis.addEventListener = function(type, handler) {
         if (globalThis.__eventListeners[type]) {
@@ -581,6 +583,7 @@ const RUNTIME_JS: &str = r#"
             this.request = request;
             this._response = null;
             this._responded = false;
+            this._waitUntilPromises = [];
         }
 
         respondWith(response) {
@@ -593,7 +596,7 @@ const RUNTIME_JS: &str = r#"
         }
 
         waitUntil(promise) {
-            // For now, just let it run
+            this._waitUntilPromises.push(promise);
         }
     }
 
@@ -718,6 +721,8 @@ const RUNTIME_JS: &str = r#"
             body: request.body
         }));
 
+        globalThis.__pendingWork = event._waitUntilPromises;
+
         for (const handler of globalThis.__eventListeners.fetch) {
             // Await the handler in case it's async
             await handler(event);
@@ -745,6 +750,20 @@ const RUNTIME_JS: &str = r#"
         }
 
         return { success: true };
+    };
+
+    // Called once the result is out; a timer left armed would otherwise fire inside the next task
+    globalThis.__drainPendingWork = async function() {
+        const pending = globalThis.__pendingWork;
+        globalThis.__pendingWork = [];
+
+        try {
+            await Promise.all(pending);
+        } catch (e) {
+            console.error('waitUntil rejected:', e);
+        }
+
+        __cancelTimers();
     };
 "#;
 
@@ -1089,7 +1108,7 @@ impl Worker {
                 })?;
                 let response = self.handle_fetch(init.req).await?;
                 let _ = init.res_tx.send(response);
-                Ok(())
+                self.drain_pending_work().await
             }
             Event::Task(init_opt) => {
                 let init = init_opt.take().ok_or_else(|| {
@@ -1105,7 +1124,7 @@ impl Worker {
                 match self.handle_scheduled(scheduled_time).await {
                     Ok(()) => {
                         let _ = init.res_tx.send(TaskResult::success());
-                        Ok(())
+                        self.drain_pending_work().await
                     }
                     Err(e) => {
                         let _ = init.res_tx.send(TaskResult::err(e.to_string()));
@@ -1114,6 +1133,20 @@ impl Worker {
                 }
             }
         }
+    }
+
+    /// Settle the `waitUntil` promises of the task that just answered, then cancel its timers
+    ///
+    /// The result is already on its way out, so this runs after it rather than delaying it.
+    async fn drain_pending_work(&self) -> Result<(), TerminationReason> {
+        async_with!(self.context => |ctx| {
+            let promise: Promise = ctx.eval(b"__drainPendingWork()")
+                .map_err(|e| TerminationReason::Exception(format!("Failed to drain pending work: {}", e)))?;
+
+            promise.into_future::<()>().await
+                .map_err(|e| TerminationReason::Exception(format!("Pending work failed: {}", e)))
+        })
+        .await
     }
 
     /// Handle a fetch event

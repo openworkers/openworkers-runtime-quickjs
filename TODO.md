@@ -4,7 +4,7 @@
 
 - [ ] **ES Modules support** - `export default { fetch() {} }` style handlers
 - [ ] **RuntimeLimits enforcement** - the `limits` parameter is accepted and ignored: no heap cap, no CPU or wall clock deadline
-- [ ] **Post-response work** - a timer left pending when a request ends only runs once the next task drives the context, and `waitUntil` on a fetch event does nothing
+- [ ] **Post-response deadline** - `exec` drains `waitUntil` with no time budget, so a promise that never settles keeps the worker busy until the host gives up
 - [ ] **abort()** - only checked before a task starts, so it cannot stop a running script
 
 ## Medium Priority

@@ -4,7 +4,8 @@ use std::time::Duration;
 /// Setup `setTimeout`, `setInterval` and their clear counterparts
 ///
 /// Delays are futures spawned on the QuickJS job queue, so a handler that awaits
-/// a timer resumes while the dispatch promise is still pending.
+/// a timer resumes while the dispatch promise is still pending. `__cancelTimers`
+/// drops every armed callback, which the worker uses to end a request.
 pub fn setup_timers(ctx: &Ctx<'_>) -> Result<()> {
     let sleep = Function::new(
         ctx.clone(),
@@ -70,5 +71,9 @@ const TIMERS_JS: &str = r#"
         };
 
         globalThis.clearInterval = globalThis.clearTimeout;
+
+        globalThis.__cancelTimers = function () {
+            timers.clear();
+        };
     })();
 "#;
