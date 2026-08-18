@@ -10,9 +10,6 @@ use rquickjs::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::mpsc;
-
-use crate::runtime::{TimerId, TimerManager, TimerMessage};
 
 const RESPONSE_STREAM_BUFFER_SIZE: usize = 16;
 
@@ -42,50 +39,6 @@ const RUNTIME_JS: &str = r#"
         error: (...args) => __console_error(__formatArgs(args)),
         info: (...args) => __console_info(__formatArgs(args)),
         debug: (...args) => __console_debug(__formatArgs(args))
-    };
-
-    // Timer storage
-    globalThis.__timerCallbacks = {};
-    globalThis.__timerIntervals = new Set();
-
-    // Timer functions
-    globalThis.setTimeout = function(callback, delay, ...args) {
-        const id = __setTimeout(delay || 0);
-        globalThis.__timerCallbacks[id] = { callback, args };
-        return id;
-    };
-
-    globalThis.setInterval = function(callback, interval, ...args) {
-        const id = __setInterval(interval || 0);
-        globalThis.__timerCallbacks[id] = { callback, args };
-        globalThis.__timerIntervals.add(id);
-        return id;
-    };
-
-    globalThis.clearTimeout = function(id) {
-        __clearTimer(id);
-        delete globalThis.__timerCallbacks[id];
-    };
-
-    globalThis.clearInterval = function(id) {
-        __clearTimer(id);
-        delete globalThis.__timerCallbacks[id];
-        globalThis.__timerIntervals.delete(id);
-    };
-
-    // Called by Rust when a timer fires
-    globalThis.__executeTimer = function(id, isInterval) {
-        const timer = globalThis.__timerCallbacks[id];
-        if (timer) {
-            if (!isInterval) {
-                delete globalThis.__timerCallbacks[id];
-            }
-            try {
-                timer.callback(...timer.args);
-            } catch (e) {
-                console.error('Timer callback error:', e);
-            }
-        }
     };
 
     // Headers class; entries are kept as a list so duplicates (Set-Cookie) survive
@@ -868,9 +821,6 @@ pub struct Worker {
     aborted: Arc<AtomicBool>,
     #[allow(dead_code)]
     ops: OperationsHandle,
-    #[allow(dead_code)]
-    timer_manager: Arc<TimerManager>,
-    timer_rx: std::sync::Mutex<mpsc::UnboundedReceiver<TimerMessage>>,
 }
 
 impl Worker {
@@ -887,9 +837,6 @@ impl Worker {
             TerminationReason::InitializationError(format!("Failed to create context: {}", e))
         })?;
 
-        // Create timer manager
-        let (timer_manager, timer_rx) = TimerManager::new();
-
         // Clone ops for use in closures
         let ops_log = ops.clone();
         let ops_warn = ops.clone();
@@ -897,11 +844,6 @@ impl Worker {
         let ops_info = ops.clone();
         let ops_debug = ops.clone();
         let ops_fetch = ops.clone();
-
-        // Clone timer manager for closures
-        let tm_timeout = timer_manager.clone();
-        let tm_interval = timer_manager.clone();
-        let tm_clear = timer_manager.clone();
 
         // Initialize runtime bindings and evaluate script
         async_with!(context => |ctx| {
@@ -933,22 +875,6 @@ impl Worker {
             }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.debug: {}", e)))?;
             global.set("__console_debug", debug_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_debug: {}", e)))?;
 
-            // Setup native timer functions
-            let timeout_fn = Function::new(ctx.clone(), move |delay: u64| -> TimerId {
-                tm_timeout.set_timeout(delay)
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create setTimeout: {}", e)))?;
-            global.set("__setTimeout", timeout_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __setTimeout: {}", e)))?;
-
-            let interval_fn = Function::new(ctx.clone(), move |interval: u64| -> TimerId {
-                tm_interval.set_interval(interval)
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create setInterval: {}", e)))?;
-            global.set("__setInterval", interval_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __setInterval: {}", e)))?;
-
-            let clear_fn = Function::new(ctx.clone(), move |id: TimerId| {
-                tm_clear.clear_timer(id);
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create clearTimer: {}", e)))?;
-            global.set("__clearTimer", clear_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __clearTimer: {}", e)))?;
-
             // Setup native fetch function that uses OperationsHandle
             let fetch_fn = Function::new(ctx.clone(), Async(move |options_json: String| {
                 let ops = ops_fetch.clone();
@@ -969,6 +895,9 @@ impl Worker {
 
             crate::runtime::setup_base64(&ctx)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup base64: {}", e)))?;
+
+            crate::runtime::setup_timers(&ctx)
+                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup timers: {}", e)))?;
 
             // Evaluate runtime bindings
             ctx.eval::<(), _>(RUNTIME_JS)
@@ -992,8 +921,6 @@ impl Worker {
             context,
             aborted: Arc::new(AtomicBool::new(false)),
             ops,
-            timer_manager,
-            timer_rx: std::sync::Mutex::new(timer_rx),
         })
     }
 
@@ -1023,7 +950,7 @@ impl Worker {
             return Err(TerminationReason::Aborted);
         }
 
-        let result = match &mut task {
+        match &mut task {
             Event::Fetch(init_opt) => {
                 let init = init_opt.take().ok_or_else(|| {
                     TerminationReason::Other("FetchInit already taken".to_string())
@@ -1054,26 +981,7 @@ impl Worker {
                     }
                 }
             }
-        };
-
-        // Process any pending timer callbacks (with timeout to prevent infinite loops)
-        for _ in 0..100 {
-            // Small delay to let timers fire
-            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-            self.process_pending_timers().await?;
-
-            // Check if there are more pending timers
-            let has_pending = {
-                let rx = self.timer_rx.lock().unwrap();
-                !rx.is_empty()
-            };
-
-            if !has_pending {
-                break;
-            }
         }
-
-        result
     }
 
     /// Handle a fetch event
@@ -1223,41 +1131,6 @@ impl Worker {
                 .map_err(|e| TerminationReason::Exception(format!("Scheduled handler failed: {}", e)))?;
 
             Ok(())
-        })
-        .await
-    }
-
-    /// Process any pending timer callbacks
-    async fn process_pending_timers(&self) -> Result<(), TerminationReason> {
-        // Collect all pending timer messages
-        let mut pending = Vec::new();
-        {
-            let mut rx = self.timer_rx.lock().unwrap();
-
-            while let Ok(msg) = rx.try_recv() {
-                pending.push(msg);
-            }
-        }
-
-        if pending.is_empty() {
-            return Ok(());
-        }
-
-        // Execute timer callbacks in JS context
-        async_with!(self.context => |ctx| {
-            for msg in pending {
-                let (id, is_interval) = match msg {
-                    TimerMessage::Timeout(id) => (id, false),
-                    TimerMessage::Interval(id) => (id, true),
-                };
-
-                let code = format!("__executeTimer({}, {})", id, is_interval);
-                if let Err(e) = ctx.eval::<(), _>(code.as_bytes()) {
-                    eprintln!("Timer callback error: {}", e);
-                }
-            }
-
-            Ok::<(), TerminationReason>(())
         })
         .await
     }
