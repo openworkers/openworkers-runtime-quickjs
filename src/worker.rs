@@ -1004,8 +1004,7 @@ impl Worker {
         })
     }
 
-    /// Create a new worker with default operations (for testing)
-    /// Create a new worker with DefaultOps (stubs)
+    /// Create a new worker whose operations are stubbed out by `DefaultOps`
     ///
     /// For real fetch support, use `new_with_ops()` with a custom OperationsHandler.
     pub async fn new(
@@ -1016,11 +1015,12 @@ impl Worker {
         Self::new_with_ops(script, limits, ops).await
     }
 
-    /// Abort the worker execution
+    /// Refuse any task started from now on
+    ///
+    /// A script that is already running keeps running: QuickJS has no interrupt
+    /// mechanism wired up here.
     pub fn abort(&mut self) {
         self.aborted.store(true, Ordering::SeqCst);
-        // QuickJS doesn't have a direct interrupt mechanism like V8,
-        // but we can check the aborted flag in our async operations
     }
 
     /// Execute a task
