@@ -2,7 +2,6 @@ pub mod runtime;
 pub mod snapshot;
 mod worker;
 
-pub use runtime::{StreamChunk, StreamId, StreamManager};
 pub use worker::Worker;
 
 // Re-export common types from openworkers-core
