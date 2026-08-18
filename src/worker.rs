@@ -954,6 +954,9 @@ impl Worker {
             crate::runtime::setup_url(&ctx)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup URL: {}", e)))?;
 
+            crate::runtime::setup_base64(&ctx)
+                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup base64: {}", e)))?;
+
             // Evaluate runtime bindings
             ctx.eval::<(), _>(RUNTIME_JS)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to evaluate runtime JS: {}", e)))?;

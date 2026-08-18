@@ -1010,6 +1010,7 @@ dependencies = [
 name = "openworkers-runtime-quickjs"
 version = "0.14.0"
 dependencies = [
+ "base64",
  "bytes",
  "openworkers-core",
  "ring",
