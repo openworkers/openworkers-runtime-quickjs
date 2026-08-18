@@ -1,4 +1,4 @@
-use rquickjs::{Ctx, Function, Object, Result};
+use rquickjs::{Ctx, Function, Object, Result, convert::List};
 use url::Url;
 
 /// The WHATWG URL components, as the JS `URL` class exposes them
@@ -145,11 +145,12 @@ pub fn setup_url(ctx: &Ctx<'_>) -> Result<()> {
     })?;
     globals.set("__urlencoded_parse", parse_query)?;
 
-    let serialize_query = Function::new(ctx.clone(), |pairs: Vec<Vec<String>>| {
+    // List rejects an entry that is not a name/value pair, where indexing would panic
+    let serialize_query = Function::new(ctx.clone(), |pairs: Vec<List<(String, String)>>| {
         let mut serializer = url::form_urlencoded::Serializer::new(String::new());
 
-        for pair in &pairs {
-            serializer.append_pair(&pair[0], &pair[1]);
+        for List((name, value)) in &pairs {
+            serializer.append_pair(name, value);
         }
 
         serializer.finish()

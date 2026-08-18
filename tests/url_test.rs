@@ -254,3 +254,17 @@ async fn test_url_is_stringifiable() {
     assert_eq!(result[1], "http://example.com/a");
     assert_eq!(result[2], "{\"u\":\"http://example.com/a\"}");
 }
+
+#[tokio::test]
+async fn test_malformed_entry_does_not_crash_serialization() {
+    let result = eval(
+        "(() => {
+            const p = new URLSearchParams('a=1');
+            p._list.push(['orphan']);
+            try { return ['ok', p.toString()]; } catch (e) { return ['threw', String(e)]; }
+        })()",
+    )
+    .await;
+
+    assert_eq!(result[0], "threw", "a short entry must not panic the host");
+}
