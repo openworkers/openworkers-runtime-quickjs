@@ -430,6 +430,10 @@ const RUNTIME_JS: &str = r#"
                 this._body = body;
             } else if (body instanceof Uint8Array) {
                 this._body = body;
+            } else if (body instanceof ArrayBuffer) {
+                this._body = new Uint8Array(body);
+            } else if (ArrayBuffer.isView(body)) {
+                this._body = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
             } else {
                 this._body = String(body);
             }
@@ -847,6 +851,15 @@ async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
     }
 }
 
+/// Bytes of a non-streaming response body, which JS holds as a string or a Uint8Array
+fn buffered_body(response: &Object<'_>) -> Option<Bytes> {
+    if let Ok(view) = response.get::<_, rquickjs::TypedArray<u8>>("_body") {
+        return view.as_bytes().map(Bytes::copy_from_slice);
+    }
+
+    response.get::<_, String>("_body").ok().map(Bytes::from)
+}
+
 /// Worker that executes JavaScript code
 pub struct Worker {
     #[allow(dead_code)]
@@ -1174,10 +1187,9 @@ impl Worker {
                 });
 
                 ResponseBody::Stream(rx)
-            } else if let Ok(raw_body) = response.get::<_, String>("_body") {
+            } else if let Some(body_bytes) = buffered_body(&response) {
                 // Convert buffered body to stream for consistency
                 let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, String>>(1);
-                let body_bytes = Bytes::from(raw_body);
 
                 tokio::spawn(async move {
                     let _ = tx.send(Ok(body_bytes)).await;
