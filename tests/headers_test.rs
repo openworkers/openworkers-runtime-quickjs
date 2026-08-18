@@ -25,6 +25,23 @@ impl OperationsHandler for TwoCookieOps {
     }
 }
 
+/// Handler answering with the request headers it received, as JSON
+struct EchoHeadersOps;
+
+impl OperationsHandler for EchoHeadersOps {
+    fn handle_fetch(&self, request: HttpRequest) -> OpFuture<'_, Result<HttpResponse, String>> {
+        Box::pin(async move {
+            let body = serde_json::to_vec(&request.headers).expect("headers should serialize");
+
+            Ok(HttpResponse {
+                status: 200,
+                headers: vec![],
+                body: ResponseBody::Bytes(Bytes::from(body)),
+            })
+        })
+    }
+}
+
 async fn respond(script: &str, ops: Arc<dyn OperationsHandler>) -> Vec<(String, String)> {
     let mut worker = Worker::new_with_ops(Script::new(script), None, ops)
         .await
@@ -43,14 +60,10 @@ async fn respond(script: &str, ops: Arc<dyn OperationsHandler>) -> Vec<(String, 
     rx.await.expect("Should receive response").headers
 }
 
-async fn respond_json(script: &str) -> serde_json::Value {
-    let mut worker = Worker::new_with_ops(
-        Script::new(script),
-        None,
-        Arc::new(openworkers_core::DefaultOps),
-    )
-    .await
-    .expect("Worker should initialize");
+async fn respond_json(script: &str, ops: Arc<dyn OperationsHandler>) -> serde_json::Value {
+    let mut worker = Worker::new_with_ops(Script::new(script), None, ops)
+        .await
+        .expect("Worker should initialize");
 
     let request = HttpRequest {
         method: HttpMethod::Get,
@@ -124,6 +137,43 @@ async fn test_duplicate_headers_survive_a_fetch_round_trip() {
 }
 
 #[tokio::test]
+async fn test_outbound_duplicate_headers_are_combined() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            const headers = new Headers();
+            headers.append('X-Trace', 'one');
+            headers.append('X-Trace', 'two');
+            headers.append('Cookie', 'a=1');
+            headers.append('Cookie', 'b=2');
+
+            const upstream = await fetch('https://example.com/', { headers });
+            event.respondWith(new Response(await upstream.text()));
+        });
+    "#;
+
+    let json = respond_json(script, Arc::new(EchoHeadersOps)).await;
+
+    assert_eq!(json["x-trace"], "one, two");
+    assert_eq!(json["cookie"], "a=1; b=2");
+}
+
+#[tokio::test]
+async fn test_outbound_header_names_are_lowercased() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            const upstream = await fetch('https://example.com/', {
+                headers: { 'X-Custom-Header': 'value' }
+            });
+            event.respondWith(new Response(await upstream.text()));
+        });
+    "#;
+
+    let json = respond_json(script, Arc::new(EchoHeadersOps)).await;
+
+    assert_eq!(json["x-custom-header"], "value");
+}
+
+#[tokio::test]
 async fn test_get_set_cookie_returns_every_value() {
     let script = r#"
         addEventListener('fetch', (event) => {
@@ -135,7 +185,7 @@ async fn test_get_set_cookie_returns_every_value() {
         });
     "#;
 
-    let json = respond_json(script).await;
+    let json = respond_json(script, Arc::new(openworkers_core::DefaultOps)).await;
 
     assert_eq!(json["cookies"][0], "a=1");
     assert_eq!(json["cookies"][1], "b=2");
@@ -170,7 +220,7 @@ async fn test_headers_are_iterable() {
         });
     "#;
 
-    let json = respond_json(script).await;
+    let json = respond_json(script, Arc::new(openworkers_core::DefaultOps)).await;
 
     assert_eq!(
         json["spread"],
@@ -199,7 +249,7 @@ async fn test_iteration_yields_every_duplicate() {
         });
     "#;
 
-    let json = respond_json(script).await;
+    let json = respond_json(script, Arc::new(openworkers_core::DefaultOps)).await;
 
     assert_eq!(
         json,

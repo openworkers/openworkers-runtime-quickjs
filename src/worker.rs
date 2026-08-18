@@ -8,6 +8,7 @@ use rquickjs::{
     async_with, prelude::Async, promise::Promise,
 };
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -678,15 +679,17 @@ const RUNTIME_JS: &str = r#"
         }
 
         const method = (options.method || 'GET').toUpperCase();
-        const headers = {};
 
-        if (options.headers) {
-            if (options.headers instanceof Headers) {
-                options.headers.forEach((value, key) => {
-                    headers[key] = value;
-                });
-            } else {
-                Object.assign(headers, options.headers);
+        // A pair list, so appended duplicates reach the host instead of overwriting each other
+        const headers = [];
+
+        if (options.headers instanceof Headers || Array.isArray(options.headers)) {
+            for (const [name, value] of options.headers) {
+                headers.push([String(name), String(value)]);
+            }
+        } else if (options.headers) {
+            for (const name of Object.keys(options.headers)) {
+                headers.push([name, String(options.headers[name])]);
             }
         }
 
@@ -750,7 +753,29 @@ const RUNTIME_JS: &str = r#"
 struct FetchOptions {
     url: String,
     method: String,
-    headers: HashMap<String, String>,
+    headers: Vec<(String, String)>,
+}
+
+/// Core carries one value per request header, so repeats are joined as HTTP joins them
+fn combine_headers(pairs: Vec<(String, String)>) -> HashMap<String, String> {
+    let mut headers: HashMap<String, String> = HashMap::new();
+
+    for (name, value) in pairs {
+        match headers.entry(name.to_lowercase()) {
+            Entry::Occupied(mut entry) => {
+                let separator = if entry.key() == "cookie" { "; " } else { ", " };
+                let combined = entry.get_mut();
+
+                combined.push_str(separator);
+                combined.push_str(&value);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+        }
+    }
+
+    headers
 }
 
 /// Fetch result for JS; headers are name/value pairs so duplicates survive.
@@ -825,7 +850,7 @@ async fn do_fetch(ops: OperationsHandle, options_json: String, body: Option<Byte
     let request = HttpRequest {
         method,
         url: options.url,
-        headers: options.headers,
+        headers: combine_headers(options.headers),
         body: match body {
             Some(bytes) => RequestBody::Bytes(bytes),
             None => RequestBody::None,
