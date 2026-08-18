@@ -792,12 +792,8 @@ fn buffered_body(response: &Object<'_>) -> Option<Bytes> {
 
 /// Worker that executes JavaScript code
 pub struct Worker {
-    #[allow(dead_code)]
-    runtime: AsyncRuntime,
     context: AsyncContext,
     aborted: Arc<AtomicBool>,
-    #[allow(dead_code)]
-    ops: OperationsHandle,
 }
 
 impl Worker {
@@ -896,10 +892,8 @@ impl Worker {
         .await?;
 
         Ok(Self {
-            runtime,
             context,
             aborted: Arc::new(AtomicBool::new(false)),
-            ops,
         })
     }
 
