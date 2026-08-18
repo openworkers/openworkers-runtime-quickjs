@@ -592,32 +592,6 @@ const RUNTIME_JS: &str = r#"
         }
     };
 
-    // URL class
-    globalThis.URL = class URL {
-        constructor(url, base) {
-            // Simple URL parsing
-            const fullUrl = base ? new URL(base).origin + url : url;
-            const match = fullUrl.match(/^(\w+):\/\/([^\/\?#]+)(\/[^\?#]*)?(\?[^#]*)?(#.*)?$/);
-            if (match) {
-                this.protocol = match[1] + ':';
-                this.host = match[2];
-                this.hostname = match[2].split(':')[0];
-                this.port = match[2].split(':')[1] || '';
-                this.pathname = match[3] || '/';
-                this.search = match[4] || '';
-                this.hash = match[5] || '';
-                this.origin = this.protocol + '//' + this.host;
-                this.href = fullUrl;
-            } else {
-                throw new Error('Invalid URL: ' + url);
-            }
-        }
-
-        toString() {
-            return this.href;
-        }
-    };
-
     // TextEncoder/TextDecoder
     globalThis.TextEncoder = class TextEncoder {
         encode(str) {
@@ -976,6 +950,9 @@ impl Worker {
             // Setup crypto global
             crate::runtime::setup_crypto(&ctx)
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup crypto: {}", e)))?;
+
+            crate::runtime::setup_url(&ctx)
+                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup URL: {}", e)))?;
 
             // Evaluate runtime bindings
             ctx.eval::<(), _>(RUNTIME_JS)
