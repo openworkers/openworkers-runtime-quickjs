@@ -43,6 +43,31 @@ async fn respond(script: &str, ops: Arc<dyn OperationsHandler>) -> Vec<(String, 
     rx.await.expect("Should receive response").headers
 }
 
+async fn respond_json(script: &str) -> serde_json::Value {
+    let mut worker = Worker::new_with_ops(
+        Script::new(script),
+        None,
+        Arc::new(openworkers_core::DefaultOps),
+    )
+    .await
+    .expect("Worker should initialize");
+
+    let request = HttpRequest {
+        method: HttpMethod::Get,
+        url: "http://localhost/".to_string(),
+        headers: HashMap::new(),
+        body: RequestBody::None,
+    };
+
+    let (task, rx) = Event::fetch(request);
+    worker.exec(task).await.expect("Task should execute");
+
+    let response = rx.await.expect("Should receive response");
+    let body = response.body.collect().await.expect("Should have body");
+
+    serde_json::from_slice(&body).expect("Should be valid JSON")
+}
+
 fn values_of<'a>(headers: &'a [(String, String)], name: &str) -> Vec<&'a str> {
     headers
         .iter()
@@ -110,31 +135,76 @@ async fn test_get_set_cookie_returns_every_value() {
         });
     "#;
 
-    let mut worker = Worker::new_with_ops(
-        Script::new(script),
-        None,
-        Arc::new(openworkers_core::DefaultOps),
-    )
-    .await
-    .expect("Worker should initialize");
-
-    let request = HttpRequest {
-        method: HttpMethod::Get,
-        url: "http://localhost/".to_string(),
-        headers: HashMap::new(),
-        body: RequestBody::None,
-    };
-
-    let (task, rx) = Event::fetch(request);
-    worker.exec(task).await.expect("Task should execute");
-
-    let response = rx.await.expect("Should receive response");
-    let body = response.body.collect().await.expect("Should have body");
-    let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
+    let json = respond_json(script).await;
 
     assert_eq!(json["cookies"][0], "a=1");
     assert_eq!(json["cookies"][1], "b=2");
     assert_eq!(json["combined"], "a=1, b=2");
+}
+
+#[tokio::test]
+async fn test_headers_are_iterable() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            const headers = new Headers([['X-One', '1'], ['X-Two', '2']]);
+
+            const loop = [];
+            for (const [name, value] of headers) {
+                loop.push(name + '=' + value);
+            }
+
+            const forEached = [];
+            headers.forEach(function (value, name) {
+                forEached.push(name + '=' + value + '=' + this.tag);
+            }, { tag: 'ctx' });
+
+            event.respondWith(new Response(JSON.stringify({
+                spread: [...headers],
+                loop: loop,
+                object: Object.fromEntries(headers),
+                keys: [...headers.keys()],
+                values: [...headers.values()],
+                entries: [...headers.entries()],
+                forEached: forEached
+            })));
+        });
+    "#;
+
+    let json = respond_json(script).await;
+
+    assert_eq!(
+        json["spread"],
+        serde_json::json!([["x-one", "1"], ["x-two", "2"]])
+    );
+    assert_eq!(json["loop"], serde_json::json!(["x-one=1", "x-two=2"]));
+    assert_eq!(
+        json["object"],
+        serde_json::json!({"x-one": "1", "x-two": "2"})
+    );
+    assert_eq!(json["keys"], serde_json::json!(["x-one", "x-two"]));
+    assert_eq!(json["values"], serde_json::json!(["1", "2"]));
+    assert_eq!(json["entries"], json["spread"]);
+    assert_eq!(
+        json["forEached"],
+        serde_json::json!(["x-one=1=ctx", "x-two=2=ctx"])
+    );
+}
+
+#[tokio::test]
+async fn test_iteration_yields_every_duplicate() {
+    let script = r#"
+        addEventListener('fetch', (event) => {
+            const headers = new Headers([['Set-Cookie', 'a=1'], ['Set-Cookie', 'b=2']]);
+            event.respondWith(new Response(JSON.stringify([...headers])));
+        });
+    "#;
+
+    let json = respond_json(script).await;
+
+    assert_eq!(
+        json,
+        serde_json::json!([["set-cookie", "a=1"], ["set-cookie", "b=2"]])
+    );
 }
 
 #[tokio::test]

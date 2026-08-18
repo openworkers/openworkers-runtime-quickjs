@@ -90,15 +90,32 @@ const RUNTIME_JS: &str = r#"
             return this._list.filter(e => e[0] === 'set-cookie').map(e => e[1]);
         }
 
+        // Insertion order rather than the spec sorted, combined view, so duplicates stay separate
         *entries() {
             for (const [name, value] of this._list) {
                 yield [name, value];
             }
         }
 
-        forEach(callback) {
+        *keys() {
+            for (const [name] of this._list) {
+                yield name;
+            }
+        }
+
+        *values() {
+            for (const [, value] of this._list) {
+                yield value;
+            }
+        }
+
+        [Symbol.iterator]() {
+            return this.entries();
+        }
+
+        forEach(callback, thisArg) {
             for (const [name, value] of this._list) {
-                callback(value, name, this);
+                callback.call(thisArg, value, name, this);
             }
         }
     };
