@@ -4,8 +4,8 @@ use openworkers_core::{
     RuntimeLimits, Script, TaskResult, TerminationReason,
 };
 use rquickjs::{
-    Array, AsyncContext, AsyncRuntime, Function, Object, async_with, prelude::Async,
-    promise::Promise,
+    Array, AsyncContext, AsyncRuntime, Ctx, Function, IntoJs, Object, TypedArray, Value,
+    async_with, prelude::Async, promise::Promise,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -613,6 +613,55 @@ const RUNTIME_JS: &str = r#"
 
     globalThis.ScheduledEvent = ScheduledEvent;
 
+    // Bytes for the native call; a stream is drained because ops take one buffer
+    const __fetchBody = async (body) => {
+        if (body === null || body === undefined) {
+            return null;
+        }
+
+        if (body instanceof Uint8Array) {
+            return body;
+        }
+
+        if (body instanceof ArrayBuffer) {
+            return new Uint8Array(body);
+        }
+
+        if (ArrayBuffer.isView(body)) {
+            return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+        }
+
+        if (body instanceof ReadableStream) {
+            const reader = body.getReader();
+            const chunks = [];
+            let length = 0;
+
+            while (true) {
+                const { done, value } = await reader.read();
+
+                if (done) {
+                    break;
+                }
+
+                const chunk = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+                chunks.push(chunk);
+                length += chunk.length;
+            }
+
+            const joined = new Uint8Array(length);
+            let offset = 0;
+
+            for (const chunk of chunks) {
+                joined.set(chunk, offset);
+                offset += chunk.length;
+            }
+
+            return joined;
+        }
+
+        return new TextEncoder().encode(String(body));
+    };
+
     // Global fetch function
     globalThis.fetch = async function(url, options) {
         options = options || {};
@@ -641,26 +690,20 @@ const RUNTIME_JS: &str = r#"
             }
         }
 
-        const body = options.body || null;
-
-        // Call native fetch
         const result = await __native_fetch(JSON.stringify({
             url: url,
             method: method,
-            headers: headers,
-            body: body
-        }));
+            headers: headers
+        }), await __fetchBody(options.body));
 
-        const data = JSON.parse(result);
-
-        if (data.error) {
-            throw new Error(data.error);
+        if (result.error) {
+            throw new Error(result.error);
         }
 
-        return new Response(data.body, {
-            status: data.status,
-            statusText: data.statusText || 'OK',
-            headers: data.headers
+        return new Response(result.body, {
+            status: result.status,
+            statusText: result.statusText || 'OK',
+            headers: result.headers
         });
     };
 
@@ -702,40 +745,69 @@ const RUNTIME_JS: &str = r#"
     };
 "#;
 
-/// Fetch options from JS
+/// Fetch options from JS; the body travels beside them, where JSON cannot corrupt it
 #[derive(serde::Deserialize)]
 struct FetchOptions {
     url: String,
     method: String,
     headers: HashMap<String, String>,
-    body: Option<String>,
 }
 
 /// Fetch result for JS; headers are name/value pairs so duplicates survive.
-#[derive(serde::Serialize)]
 struct FetchResult {
     status: u16,
-    #[serde(rename = "statusText")]
     status_text: String,
     headers: Vec<(String, String)>,
-    body: String,
+    body: Option<Bytes>,
     error: Option<String>,
 }
 
+impl FetchResult {
+    fn failed(error: String) -> Self {
+        Self {
+            status: 0,
+            status_text: String::new(),
+            headers: Vec::new(),
+            body: None,
+            error: Some(error),
+        }
+    }
+}
+
+impl<'js> IntoJs<'js> for FetchResult {
+    fn into_js(self, ctx: &Ctx<'js>) -> rquickjs::Result<Value<'js>> {
+        let result = Object::new(ctx.clone())?;
+
+        result.set("status", self.status)?;
+        result.set("statusText", self.status_text)?;
+        result.set("error", self.error)?;
+
+        let headers = Array::new(ctx.clone())?;
+
+        for (index, (name, value)) in self.headers.into_iter().enumerate() {
+            let pair = Array::new(ctx.clone())?;
+            pair.set(0, name)?;
+            pair.set(1, value)?;
+            headers.set(index, pair)?;
+        }
+
+        result.set("headers", headers)?;
+
+        let body = self
+            .body
+            .map(|bytes| TypedArray::new(ctx.clone(), bytes.to_vec()))
+            .transpose()?;
+        result.set("body", body)?;
+
+        Ok(result.into_value())
+    }
+}
+
 /// Native fetch implementation using OperationsHandle
-async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
+async fn do_fetch(ops: OperationsHandle, options_json: String, body: Option<Bytes>) -> FetchResult {
     let options: FetchOptions = match serde_json::from_str(&options_json) {
         Ok(o) => o,
-        Err(e) => {
-            return serde_json::to_string(&FetchResult {
-                status: 0,
-                status_text: String::new(),
-                headers: Vec::new(),
-                body: String::new(),
-                error: Some(format!("Invalid fetch options: {}", e)),
-            })
-            .unwrap();
-        }
+        Err(e) => return FetchResult::failed(format!("Invalid fetch options: {}", e)),
     };
 
     // Convert to HttpRequest for OperationsHandle
@@ -750,64 +822,47 @@ async fn do_fetch(ops: OperationsHandle, options_json: String) -> String {
         _ => openworkers_core::HttpMethod::Get,
     };
 
-    let body = match options.body {
-        Some(b) => RequestBody::Bytes(Bytes::from(b)),
-        None => RequestBody::None,
-    };
-
     let request = HttpRequest {
         method,
         url: options.url,
         headers: options.headers,
-        body,
+        body: match body {
+            Some(bytes) => RequestBody::Bytes(bytes),
+            None => RequestBody::None,
+        },
     };
 
-    // Call ops.handle_fetch()
-    match ops.handle_fetch(request).await {
-        Ok(response) => {
-            // Collect body
-            let body = match response.body.collect().await {
-                Some(b) => String::from_utf8_lossy(&b).to_string(),
-                None => String::new(),
-            };
+    let response = match ops.handle_fetch(request).await {
+        Ok(response) => response,
+        Err(e) => return FetchResult::failed(e),
+    };
 
-            // Generate status text from status code
-            let status_text = match response.status {
-                200 => "OK",
-                201 => "Created",
-                204 => "No Content",
-                400 => "Bad Request",
-                401 => "Unauthorized",
-                403 => "Forbidden",
-                404 => "Not Found",
-                500 => "Internal Server Error",
-                _ => "OK",
-            }
-            .to_string();
+    // Generate status text from status code
+    let status_text = match response.status {
+        200 => "OK",
+        201 => "Created",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    }
+    .to_string();
 
-            serde_json::to_string(&FetchResult {
-                status: response.status,
-                status_text,
-                headers: response.headers,
-                body,
-                error: None,
-            })
-            .unwrap()
-        }
-        Err(e) => serde_json::to_string(&FetchResult {
-            status: 0,
-            status_text: String::new(),
-            headers: Vec::new(),
-            body: String::new(),
-            error: Some(e),
-        })
-        .unwrap(),
+    FetchResult {
+        status: response.status,
+        status_text,
+        headers: response.headers,
+        body: response.body.collect().await,
+        error: None,
     }
 }
 
 /// Bytes of a non-streaming response body, which JS holds as a string or a Uint8Array
 fn buffered_body(response: &Object<'_>) -> Option<Bytes> {
-    if let Ok(view) = response.get::<_, rquickjs::TypedArray<u8>>("_body") {
+    if let Ok(view) = response.get::<_, TypedArray<u8>>("_body") {
         return view.as_bytes().map(Bytes::copy_from_slice);
     }
 
@@ -873,10 +928,11 @@ impl Worker {
             global.set("__console_debug", debug_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_debug: {}", e)))?;
 
             // Setup native fetch function that uses OperationsHandle
-            let fetch_fn = Function::new(ctx.clone(), Async(move |options_json: String| {
+            let fetch_fn = Function::new(ctx.clone(), Async(move |options_json: String, body: Option<TypedArray<'_, u8>>| {
                 let ops = ops_fetch.clone();
+                let body = body.and_then(|view| view.as_bytes().map(Bytes::copy_from_slice));
                 async move {
-                    do_fetch(ops, options_json).await
+                    do_fetch(ops, options_json, body).await
                 }
             }))
                 .map_err(|e| TerminationReason::InitializationError(format!("Failed to create fetch function: {}", e)))?;
@@ -1069,7 +1125,7 @@ impl Worker {
                     }
 
                     // Get value (Uint8Array)
-                    if let Ok(value) = result.get::<_, rquickjs::TypedArray<u8>>("value") {
+                    if let Ok(value) = result.get::<_, TypedArray<u8>>("value") {
                         let chunk_data: Vec<u8> = value.as_bytes().unwrap_or(&[]).to_vec();
                         chunks.push(chunk_data);
                     }
