@@ -63,3 +63,16 @@ async fn test_string_body_still_works() {
 
     assert_eq!(body, b"plain string");
 }
+
+#[tokio::test]
+async fn test_status_text_defaults_to_empty() {
+    let body = respond_with(
+        "JSON.stringify([
+            new Response('a').statusText,
+            new Response('b', { statusText: 'Custom' }).statusText
+        ])",
+    )
+    .await;
+
+    assert_eq!(body, br#"["","Custom"]"#);
+}

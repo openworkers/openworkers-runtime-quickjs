@@ -18,7 +18,6 @@
 ## Low Priority
 
 - [ ] **Web API coverage** - no AbortController, Blob/FormData, structuredClone, queueMicrotask
-- [ ] **statusText** - unknown status codes are reported to JS as "OK"
 - [ ] **Benchmark suite** - `examples/ssr_bench.rs` covers SvelteKit SSR; nothing automated
 
 ## Won't Do (N/A for QuickJS)

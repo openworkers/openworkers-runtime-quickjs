@@ -392,7 +392,7 @@ const RUNTIME_JS: &str = r#"
         constructor(body, init) {
             init = init || {};
             this.status = init.status || 200;
-            this.statusText = init.statusText || 'OK';
+            this.statusText = init.statusText === undefined ? '' : String(init.statusText);
             this.headers = new Headers(init.headers);
             this.ok = this.status >= 200 && this.status < 300;
             this._bodyUsed = false;
@@ -705,7 +705,7 @@ const RUNTIME_JS: &str = r#"
 
         return new Response(result.body, {
             status: result.status,
-            statusText: result.statusText || 'OK',
+            statusText: result.statusText,
             headers: result.headers
         });
     };
@@ -828,6 +828,74 @@ impl<'js> IntoJs<'js> for FetchResult {
     }
 }
 
+/// The registered reason phrase, empty for a status code that has none
+fn status_text(status: u16) -> &'static str {
+    match status {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        102 => "Processing",
+        103 => "Early Hints",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        207 => "Multi-Status",
+        208 => "Already Reported",
+        226 => "IM Used",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        305 => "Use Proxy",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Content Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Content",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        _ => "",
+    }
+}
+
 /// Native fetch implementation using OperationsHandle
 async fn do_fetch(ops: OperationsHandle, options_json: String, body: Option<Bytes>) -> FetchResult {
     let options: FetchOptions = match serde_json::from_str(&options_json) {
@@ -862,23 +930,9 @@ async fn do_fetch(ops: OperationsHandle, options_json: String, body: Option<Byte
         Err(e) => return FetchResult::failed(e),
     };
 
-    // Generate status text from status code
-    let status_text = match response.status {
-        200 => "OK",
-        201 => "Created",
-        204 => "No Content",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        500 => "Internal Server Error",
-        _ => "OK",
-    }
-    .to_string();
-
     FetchResult {
         status: response.status,
-        status_text,
+        status_text: status_text(response.status).to_string(),
         headers: response.headers,
         body: response.body.collect().await,
         error: None,

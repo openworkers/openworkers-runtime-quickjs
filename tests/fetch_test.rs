@@ -74,6 +74,28 @@ impl OperationsHandler for EchoOps {
     }
 }
 
+/// Handler answering with the status code named at the end of the URL
+struct StatusOps;
+
+impl OperationsHandler for StatusOps {
+    fn handle_fetch(&self, request: HttpRequest) -> OpFuture<'_, Result<HttpResponse, String>> {
+        Box::pin(async move {
+            let status = request
+                .url
+                .rsplit('/')
+                .next()
+                .and_then(|status| status.parse().ok())
+                .expect("url should end with a status code");
+
+            Ok(HttpResponse {
+                status,
+                headers: vec![],
+                body: ResponseBody::None,
+            })
+        })
+    }
+}
+
 /// Run a script and parse the JSON body it responds with
 async fn respond_json(script: &str, ops: Arc<dyn OperationsHandler>) -> serde_json::Value {
     let mut worker = Worker::new_with_ops(Script::new(script), None, ops)
@@ -216,6 +238,32 @@ async fn test_fetch_round_trips_binary_bodies() {
         json["text"],
         serde_json::json!([104, 195, 169, 108, 108, 111])
     );
+}
+
+#[tokio::test]
+async fn test_status_text_comes_from_the_status_code() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            const texts = {};
+
+            for (const status of [200, 201, 302, 404, 418, 503, 599]) {
+                const response = await fetch('https://example.com/status/' + status);
+                texts[status] = response.statusText;
+            }
+
+            event.respondWith(new Response(JSON.stringify(texts)));
+        });
+    "#;
+
+    let json = respond_json(script, Arc::new(StatusOps)).await;
+
+    assert_eq!(json["200"], "OK");
+    assert_eq!(json["201"], "Created");
+    assert_eq!(json["302"], "Found");
+    assert_eq!(json["404"], "Not Found");
+    assert_eq!(json["418"], "");
+    assert_eq!(json["503"], "Service Unavailable");
+    assert_eq!(json["599"], "");
 }
 
 #[tokio::test]
