@@ -38,15 +38,22 @@ and collect logs. A runnable version of the above is `cargo run --example hello_
 ## Implemented
 
 - `fetch` and `scheduled` events via `addEventListener`
-- console, `setTimeout`/`setInterval`, Headers, Request, Response, URL, TextEncoder/TextDecoder
+- console, Headers, Request, Response, TextEncoder/TextDecoder, `atob`/`btoa`
+- `URL` and `URLSearchParams`, backed by the `url` crate
+- `setTimeout`/`setInterval`, awaitable from inside a handler
 - `fetch()` and console delegated to the runner through `OperationsHandler`
 - `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.subtle.digest` (SHA-1/256/384/512)
 - ReadableStream response bodies, collected in the runtime before the response is sent
+
+It renders the SvelteKit SSR bundle of openworkers-website byte for byte like V8:
+`cargo run --release --example ssr_bench -- <bundle.js>` times the wake, serve and
+sleep cycle.
 
 ## Not implemented
 
 - ES modules (`export default { fetch() {} }`)
 - Streaming request bodies (rejected with an error) and WebSocket
+- AbortController, Blob, FormData, structuredClone, `queueMicrotask`
 - KV, storage, database and worker bindings
 - `RuntimeLimits`: the parameter is accepted and ignored
 

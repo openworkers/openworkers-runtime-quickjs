@@ -4,7 +4,7 @@
 
 - [ ] **ES Modules support** - `export default { fetch() {} }` style handlers
 - [ ] **RuntimeLimits enforcement** - the `limits` parameter is accepted and ignored: no heap cap, no CPU or wall clock deadline
-- [ ] **Post-response work** - timers scheduled during a request are dropped unless their delay is 0, and `waitUntil` on a fetch event does nothing
+- [ ] **Post-response work** - a timer left pending when a request ends only runs once the next task drives the context, and `waitUntil` on a fetch event does nothing
 - [ ] **abort()** - only checked before a task starts, so it cannot stop a running script
 
 ## Medium Priority
@@ -16,9 +16,9 @@
 
 ## Low Priority
 
-- [ ] **Web API coverage** - no URLSearchParams, atob/btoa, AbortController, Blob/FormData, structuredClone, queueMicrotask
+- [ ] **Web API coverage** - no AbortController, Blob/FormData, structuredClone, queueMicrotask
 - [ ] **statusText** - unknown status codes are reported to JS as "OK"
-- [ ] **Benchmark suite** - automated perf comparison with V8
+- [ ] **Benchmark suite** - `examples/ssr_bench.rs` covers SvelteKit SSR; nothing automated
 
 ## Won't Do (N/A for QuickJS)
 
