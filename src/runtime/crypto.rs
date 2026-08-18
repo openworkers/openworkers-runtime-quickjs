@@ -10,20 +10,25 @@ pub fn setup_crypto(ctx: &Ctx<'_>) -> Result<()> {
 
     // Setup crypto.getRandomValues - modifies array in place
     let get_random_values = Function::new(ctx.clone(), |array: rquickjs::TypedArray<'_, u8>| {
-        let rng = rand::SystemRandom::new();
+        let Some(data) = array.as_bytes() else {
+            return Err(rquickjs::Error::new_from_js_message(
+                "object",
+                "Uint8Array",
+                "Buffer is detached",
+            ));
+        };
 
-        if let Some(data) = array.as_bytes() {
-            let len = data.len();
-            let mut bytes = vec![0u8; len];
+        let len = data.len();
+        let mut bytes = vec![0u8; len];
 
-            if rand::SecureRandom::fill(&rng, &mut bytes).is_ok() {
-                // Get raw buffer access and copy bytes
-                let raw = array.as_raw().unwrap();
-                unsafe {
-                    let ptr = raw.ptr.as_ptr() as *mut u8;
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, len);
-                }
-            }
+        // Throw rather than leave the caller with a buffer we did not randomize
+        rand::SecureRandom::fill(&rand::SystemRandom::new(), &mut bytes).map_err(|_| {
+            rquickjs::Error::new_from_js_message("object", "Uint8Array", "System RNG failed")
+        })?;
+
+        let raw = array.as_raw().unwrap();
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), raw.ptr.as_ptr(), len);
         }
 
         Ok::<_, rquickjs::Error>(())
