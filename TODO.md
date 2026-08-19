@@ -11,7 +11,6 @@
 
 - [ ] **Bindings JS API** - expose `env.KV`, `env.DB`, `env.STORAGE` and worker bindings
 - [ ] **True streaming** - request bodies are rejected when streamed, and a response ReadableStream is fully drained before the first chunk is sent
-- [ ] **Binary bodies** - request bodies reach JS through `String::from_utf8_lossy`, which corrupts non-UTF-8 payloads
 - [ ] **Outbound request headers** - `HttpRequest.headers` is a `HashMap`, so repeated names are joined into one field value before the request leaves the runtime
 - [ ] **crypto.subtle** - only `digest`; no importKey/sign/verify, HMAC, ECDSA, RSA or PBKDF2
 

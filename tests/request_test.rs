@@ -79,3 +79,76 @@ async fn test_request_without_body_is_empty() {
 
     assert_eq!(echoed["body"], "");
 }
+
+/// Run a script against one POST carrying `payload` and return the body it answered with
+async fn post(script: &str, payload: Vec<u8>) -> String {
+    let mut worker = Worker::new(Script::new(script), None)
+        .await
+        .expect("Worker should initialize");
+
+    let mut request = get("http://localhost/");
+    request.method = HttpMethod::Post;
+    request.body = RequestBody::Bytes(Bytes::from(payload));
+
+    let (task, rx) = Event::fetch(request);
+    worker.exec(task).await.expect("Task should execute");
+
+    let response = rx.await.expect("Should receive response");
+    let body = response.body.collect().await.unwrap_or_default();
+
+    String::from_utf8(body.to_vec()).expect("Response should be UTF-8")
+}
+
+#[tokio::test]
+async fn test_non_utf8_body_reaches_the_worker_intact() {
+    let script = r#"
+        addEventListener('fetch', event => {
+            event.respondWith((async () => {
+                const bytes = new Uint8Array(await event.request.arrayBuffer());
+                return new Response(JSON.stringify([...bytes]));
+            })());
+        });
+    "#;
+
+    let body = post(script, vec![0xff, 0xfe, 0x00, 0x41]).await;
+
+    assert_eq!(body, "[255,254,0,65]");
+}
+
+#[tokio::test]
+async fn test_body_used_flips_once_the_body_is_read() {
+    let script = r#"
+        addEventListener('fetch', event => {
+            event.respondWith((async () => {
+                const before = event.request.bodyUsed;
+                await event.request.text();
+                return new Response(before + ',' + event.request.bodyUsed);
+            })());
+        });
+    "#;
+
+    let body = post(script, b"hello".to_vec()).await;
+
+    assert_eq!(body, "false,true");
+}
+
+#[tokio::test]
+async fn test_reading_a_body_twice_throws() {
+    let script = r#"
+        addEventListener('fetch', event => {
+            event.respondWith((async () => {
+                await event.request.text();
+                try {
+                    await event.request.text();
+                    return new Response('no throw');
+                } catch (e) {
+                    return new Response(e.name);
+                }
+            })());
+        });
+    "#;
+
+    let body = post(script, b"hello".to_vec()).await;
+
+    assert_eq!(body, "TypeError");
+}

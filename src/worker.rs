@@ -652,10 +652,26 @@ const RUNTIME_JS: &str = r#"
                 this.headers = new Headers(init.headers);
                 this._body = init.body || null;
             }
+
+            this._bodyUsed = false;
+        }
+
+        get bodyUsed() {
+            return this._bodyUsed;
         }
 
         async text() {
+            if (this._bodyUsed) {
+                throw new TypeError('Body has already been consumed');
+            }
+            this._bodyUsed = true;
+
             if (this._body === null) return '';
+
+            if (this._body instanceof Uint8Array) {
+                return new TextDecoder().decode(this._body);
+            }
+
             return String(this._body);
         }
 
@@ -668,7 +684,27 @@ const RUNTIME_JS: &str = r#"
             return __formData(this.headers.get('content-type'), await this.text());
         }
 
+        async arrayBuffer() {
+            if (this._bodyUsed) {
+                throw new TypeError('Body has already been consumed');
+            }
+            this._bodyUsed = true;
+
+            if (this._body === null) return new ArrayBuffer(0);
+
+            if (this._body instanceof Uint8Array) {
+                // Slice, or a view over part of a buffer would hand out the whole buffer
+                const bytes = this._body;
+                return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+            }
+
+            return new TextEncoder().encode(String(this._body)).buffer;
+        }
+
         clone() {
+            if (this._bodyUsed) {
+                throw new TypeError('Cannot clone a used body');
+            }
             return new Request(this.url, {
                 method: this.method,
                 headers: this.headers,
@@ -814,12 +850,12 @@ const RUNTIME_JS: &str = r#"
         });
     };
 
-    // Dispatch fetch event
-    globalThis.__dispatchFetch = async function(request) {
-        const event = new FetchEvent(new Request(request.url, {
-            method: request.method,
-            headers: request.headers,
-            body: request.body
+    // The body travels beside the init, where JSON cannot corrupt it
+    globalThis.__dispatchFetch = async function(init, body) {
+        const event = new FetchEvent(new Request(init.url, {
+            method: init.method,
+            headers: init.headers,
+            body: body ?? null
         }));
 
         globalThis.__pendingWork = event._waitUntilPromises;
@@ -1254,7 +1290,7 @@ impl Worker {
     async fn handle_fetch(&self, request: HttpRequest) -> Result<HttpResponse, TerminationReason> {
         async_with!(self.context => |ctx| {
             let body = match &request.body {
-                RequestBody::Bytes(b) => Some(String::from_utf8_lossy(b).to_string()),
+                RequestBody::Bytes(b) => Some(b.clone()),
                 RequestBody::None => None,
                 RequestBody::Stream(_) => {
                     return Err(TerminationReason::Other(
@@ -1263,18 +1299,26 @@ impl Worker {
                 }
             };
 
-            // JSON so that quotes and newlines in the url or body cannot break out of the literal
-            let request_json = serde_json::json!({
+            let init_json = serde_json::json!({
                 "method": request.method.to_string(),
                 "url": request.url,
                 "headers": request.headers,
-                "body": body,
             });
 
-            let dispatch_code = format!("__dispatchFetch({})", request_json);
+            let init = ctx.json_parse(init_json.to_string())
+                .map_err(|e| TerminationReason::Exception(format!("Failed to build request init: {}", e)))?;
+
+            // A typed array rather than a string, or a non-UTF-8 body would be mangled
+            let body = body
+                .map(|bytes| TypedArray::new(ctx.clone(), bytes.to_vec()))
+                .transpose()
+                .map_err(|e| TerminationReason::Exception(format!("Failed to build request body: {}", e)))?;
+
+            let dispatch: Function = ctx.globals().get("__dispatchFetch")
+                .map_err(|e| TerminationReason::Exception(format!("Failed to get __dispatchFetch: {}", e)))?;
 
             // Dispatch and get response
-            let promise: Promise = ctx.eval(dispatch_code.as_bytes())
+            let promise: Promise = dispatch.call((init, body))
                 .map_err(|e| TerminationReason::Exception(format!("Failed to dispatch fetch: {}", e)))?;
 
             let response: Object = promise.into_future().await
