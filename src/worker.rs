@@ -772,6 +772,10 @@ const RUNTIME_JS: &str = r#"
             return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
         }
 
+        if (body instanceof FormData) {
+            throw new TypeError('multipart/form-data request bodies are not supported');
+        }
+
         if (body instanceof ReadableStream) {
             const reader = body.getReader();
             const chunks = [];
@@ -831,6 +835,12 @@ const RUNTIME_JS: &str = r#"
             for (const name of Object.keys(options.headers)) {
                 headers.push([name, String(options.headers[name])]);
             }
+        }
+
+        // A urlencoded body is unreadable to the peer without the type it implies
+        if (options.body instanceof URLSearchParams &&
+            !headers.some(([name]) => name.toLowerCase() === 'content-type')) {
+            headers.push(['content-type', 'application/x-www-form-urlencoded;charset=UTF-8']);
         }
 
         const result = await __native_fetch(JSON.stringify({

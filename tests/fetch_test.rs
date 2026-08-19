@@ -74,6 +74,32 @@ impl OperationsHandler for EchoOps {
     }
 }
 
+/// Handler reporting the content type and body of the request it received
+struct EchoFormOps;
+
+impl OperationsHandler for EchoFormOps {
+    fn handle_fetch(&self, request: HttpRequest) -> OpFuture<'_, Result<HttpResponse, String>> {
+        Box::pin(async move {
+            let body = match request.body {
+                RequestBody::Bytes(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                RequestBody::None => String::new(),
+                RequestBody::Stream(_) => return Err("streamed request body".to_string()),
+            };
+
+            let echoed = serde_json::json!({
+                "type": request.headers.get("content-type"),
+                "body": body,
+            });
+
+            Ok(HttpResponse {
+                status: 200,
+                headers: vec![],
+                body: ResponseBody::Bytes(Bytes::from(echoed.to_string())),
+            })
+        })
+    }
+}
+
 /// Handler answering with the status code named at the end of the URL
 struct StatusOps;
 
@@ -279,4 +305,64 @@ async fn test_fetch_without_body_sends_none() {
     let json = respond_json(script, Arc::new(EchoOps)).await;
 
     assert_eq!(json["length"], 0);
+}
+
+#[tokio::test]
+async fn test_urlencoded_body_carries_its_content_type() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            const response = await fetch('https://example.com/echo', {
+                method: 'POST',
+                body: new URLSearchParams({ a: '1', b: 'x y' })
+            });
+            event.respondWith(new Response(await response.text()));
+        });
+    "#;
+
+    let json = respond_json(script, Arc::new(EchoFormOps)).await;
+
+    assert_eq!(
+        json["type"],
+        "application/x-www-form-urlencoded;charset=UTF-8"
+    );
+    assert_eq!(json["body"], "a=1&b=x+y");
+}
+
+#[tokio::test]
+async fn test_explicit_content_type_wins_over_the_body() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            const response = await fetch('https://example.com/echo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain' },
+                body: new URLSearchParams({ a: '1' })
+            });
+            event.respondWith(new Response(await response.text()));
+        });
+    "#;
+
+    let json = respond_json(script, Arc::new(EchoFormOps)).await;
+
+    assert_eq!(json["type"], "text/plain");
+}
+
+#[tokio::test]
+async fn test_form_data_body_is_refused() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            const form = new FormData();
+            form.append('a', '1');
+
+            try {
+                await fetch('https://example.com/echo', { method: 'POST', body: form });
+                event.respondWith(new Response(JSON.stringify({ error: 'no throw' })));
+            } catch (e) {
+                event.respondWith(new Response(JSON.stringify({ error: e.name })));
+            }
+        });
+    "#;
+
+    let json = respond_json(script, Arc::new(EchoFormOps)).await;
+
+    assert_eq!(json["error"], "TypeError");
 }
