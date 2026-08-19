@@ -30,3 +30,9 @@ ring = "0.17"
 uuid = { version = "1.17", features = ["v4"] }
 url = "2.5.8"
 base64 = "0.22"
+
+[dev-dependencies]
+
+# ESM -> classic script lowering, the same pass every runtime uses
+openworkers-transform = { git = "https://github.com/openworkers/openworkers-transform", tag = "v0.1.0" }
+sha2 = "0.10"
