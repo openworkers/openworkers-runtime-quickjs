@@ -130,6 +130,97 @@ const RUNTIME_JS: &str = r#"
         }
     };
 
+    // Entry list rather than a map, so a repeated field name keeps every value
+    globalThis.FormData = class FormData {
+        constructor() {
+            this._list = [];
+        }
+
+        append(name, value) {
+            this._list.push([String(name), String(value)]);
+        }
+
+        set(name, value) {
+            name = String(name);
+            const index = this._list.findIndex(entry => entry[0] === name);
+
+            if (index === -1) {
+                this._list.push([name, String(value)]);
+                return;
+            }
+
+            this._list[index][1] = String(value);
+            this._list = this._list.filter((entry, i) => i <= index || entry[0] !== name);
+        }
+
+        get(name) {
+            name = String(name);
+            const entry = this._list.find(entry => entry[0] === name);
+            return entry ? entry[1] : null;
+        }
+
+        getAll(name) {
+            name = String(name);
+            return this._list.filter(entry => entry[0] === name).map(entry => entry[1]);
+        }
+
+        has(name) {
+            name = String(name);
+            return this._list.some(entry => entry[0] === name);
+        }
+
+        delete(name) {
+            name = String(name);
+            this._list = this._list.filter(entry => entry[0] !== name);
+        }
+
+        *entries() {
+            for (const [name, value] of this._list) {
+                yield [name, value];
+            }
+        }
+
+        *keys() {
+            for (const [name] of this._list) {
+                yield name;
+            }
+        }
+
+        *values() {
+            for (const [, value] of this._list) {
+                yield value;
+            }
+        }
+
+        [Symbol.iterator]() {
+            return this.entries();
+        }
+
+        forEach(callback, thisArg) {
+            for (const [name, value] of this._list) {
+                callback.call(thisArg, value, name, this);
+            }
+        }
+    };
+
+    // multipart is out: without Blob and File a file part has nothing to land in
+    const __formData = (contentType, text) => {
+        const type = String(contentType || '').split(';')[0].trim().toLowerCase();
+
+        if (type !== 'application/x-www-form-urlencoded') {
+            throw new TypeError('formData() supports application/x-www-form-urlencoded only, got ' +
+                (type || 'no content-type'));
+        }
+
+        const form = new FormData();
+
+        for (const [name, value] of __urlencoded_parse(text)) {
+            form.append(name, value);
+        }
+
+        return form;
+    };
+
     // ReadableStream implementation (simplified WHATWG spec)
     globalThis.ReadableStream = class ReadableStream {
         constructor(underlyingSource = {}) {
@@ -484,6 +575,10 @@ const RUNTIME_JS: &str = r#"
             return JSON.parse(text);
         }
 
+        async formData() {
+            return __formData(this.headers.get('content-type'), await this.text());
+        }
+
         async arrayBuffer() {
             if (this._bodyUsed) {
                 throw new TypeError('Body has already been consumed');
@@ -567,6 +662,10 @@ const RUNTIME_JS: &str = r#"
         async json() {
             const text = await this.text();
             return JSON.parse(text);
+        }
+
+        async formData() {
+            return __formData(this.headers.get('content-type'), await this.text());
         }
 
         clone() {

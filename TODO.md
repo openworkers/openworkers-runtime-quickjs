@@ -17,7 +17,8 @@
 
 ## Low Priority
 
-- [ ] **Web API coverage** - no AbortController, Blob/FormData, structuredClone, queueMicrotask
+- [ ] **Web API coverage** - no AbortController, Blob, structuredClone, queueMicrotask
+- [ ] **multipart/form-data** - `formData()` handles urlencoded only; a file part needs Blob and File
 - [ ] **Benchmark suite** - `examples/ssr_bench.rs` covers SvelteKit SSR; nothing automated
 
 ## Won't Do (N/A for QuickJS)

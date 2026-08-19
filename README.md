@@ -40,6 +40,7 @@ and collect logs. A runnable version of the above is `cargo run --example hello_
 - `fetch` and `scheduled` events via `addEventListener`
 - console, Headers, Request, Response, TextEncoder/TextDecoder, `atob`/`btoa`
 - `URL` and `URLSearchParams`, backed by the `url` crate
+- `FormData`, and `formData()` on `Request`/`Response` for urlencoded bodies
 - `setTimeout`/`setInterval`, awaitable from inside a handler
 - `fetch()` and console delegated to the runner through `OperationsHandler`
 - `crypto.getRandomValues`, `crypto.randomUUID`, `crypto.subtle.digest` (SHA-1/256/384/512)
@@ -62,7 +63,8 @@ sleep cycle.
 
 - ES modules (`export default { fetch() {} }`)
 - Streaming request bodies (rejected with an error) and WebSocket
-- AbortController, Blob, FormData, structuredClone, `queueMicrotask`
+- AbortController, Blob, structuredClone, `queueMicrotask`
+- `multipart/form-data`: `formData()` throws on it, a file part needs Blob and File
 - KV, storage, database and worker bindings
 - `RuntimeLimits`: the parameter is accepted and ignored
 
