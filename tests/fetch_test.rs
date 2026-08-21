@@ -371,3 +371,25 @@ async fn test_form_data_body_is_refused() {
 
     assert_eq!(json["error"], "TypeError");
 }
+
+#[tokio::test]
+async fn test_a_method_the_host_cannot_send_is_refused() {
+    let script = r#"
+        addEventListener('fetch', async (event) => {
+            try {
+                await fetch('https://example.com/echo', { method: 'FOO' });
+                event.respondWith(new Response(JSON.stringify({ error: 'no throw' })));
+            } catch (e) {
+                event.respondWith(new Response(JSON.stringify({
+                    error: e.name,
+                    message: e.message
+                })));
+            }
+        });
+    "#;
+
+    let json = respond_json(script, Arc::new(EchoOps)).await;
+
+    assert_eq!(json["error"], "TypeError");
+    assert_eq!(json["message"], "fetch does not support the FOO method");
+}

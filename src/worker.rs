@@ -850,7 +850,7 @@ const RUNTIME_JS: &str = r#"
         }), await __fetchBody(options.body));
 
         if (result.error) {
-            throw new Error(result.error);
+            throw new TypeError(result.error);
         }
 
         return new Response(result.body, {
@@ -1070,15 +1070,14 @@ async fn do_fetch(ops: OperationsHandle, options_json: String, body: Option<Byte
     };
 
     // Convert to HttpRequest for OperationsHandle
-    let method = match options.method.as_str() {
-        "GET" => openworkers_core::HttpMethod::Get,
-        "POST" => openworkers_core::HttpMethod::Post,
-        "PUT" => openworkers_core::HttpMethod::Put,
-        "DELETE" => openworkers_core::HttpMethod::Delete,
-        "PATCH" => openworkers_core::HttpMethod::Patch,
-        "HEAD" => openworkers_core::HttpMethod::Head,
-        "OPTIONS" => openworkers_core::HttpMethod::Options,
-        _ => openworkers_core::HttpMethod::Get,
+    let method = match options.method.parse::<openworkers_core::HttpMethod>() {
+        Ok(method) => method,
+        Err(()) => {
+            return FetchResult::failed(format!(
+                "fetch does not support the {} method",
+                options.method
+            ));
+        }
     };
 
     let request = HttpRequest {
