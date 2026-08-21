@@ -134,7 +134,12 @@ async fn test_non_stream_response() {
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
     assert_eq!(String::from_utf8_lossy(&body), "Hello World");
 }
 
@@ -166,7 +171,12 @@ async fn test_response_body_property() {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["hasBody"], true);
     assert_eq!(json["isStream"], true);

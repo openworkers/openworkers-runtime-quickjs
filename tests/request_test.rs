@@ -24,7 +24,12 @@ async fn echo(request: HttpRequest) -> serde_json::Value {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
 
     serde_json::from_slice(&body).expect("Should be valid JSON")
 }
@@ -94,7 +99,12 @@ async fn post(script: &str, payload: Vec<u8>) -> String {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.collect().await.unwrap_or_default();
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .unwrap_or_default();
 
     String::from_utf8(body.to_vec()).expect("Response should be UTF-8")
 }

@@ -52,7 +52,12 @@ async fn render(worker: &mut Worker, path: &str) -> (u16, Vec<u8>) {
     let (task, rx) = Event::fetch(req);
     worker.exec(task).await.expect("dispatch failed");
     let res = rx.await.expect("no response");
-    let body = res.body.collect().await.unwrap_or_default();
+    let body = res
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .unwrap_or_default();
 
     (res.status, body.to_vec())
 }

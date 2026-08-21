@@ -1096,11 +1096,16 @@ async fn do_fetch(ops: OperationsHandle, options_json: String, body: Option<Byte
         Err(e) => return FetchResult::failed(e),
     };
 
+    let body = match response.body.collect().await {
+        Ok(body) => body,
+        Err(e) => return FetchResult::failed(format!("Failed to read response body: {}", e)),
+    };
+
     FetchResult {
         status: response.status,
         status_text: status_text(response.status).to_string(),
         headers: response.headers,
-        body: response.body.collect().await,
+        body,
         error: None,
     }
 }
@@ -1264,7 +1269,7 @@ impl Worker {
 
                 // Extract scheduled time from source
                 let scheduled_time = match &init.source {
-                    Some(openworkers_core::TaskSource::Schedule { time }) => *time,
+                    Some(openworkers_core::TaskSource::Schedule { time, .. }) => *time,
                     _ => 0,
                 };
 

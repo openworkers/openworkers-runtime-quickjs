@@ -36,7 +36,12 @@ async fn test_settimeout_basic() {
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
 
     assert_eq!(
@@ -77,7 +82,12 @@ async fn test_settimeout_returns_id() {
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["hasId"], true);
 }
@@ -115,7 +125,12 @@ async fn test_setinterval_returns_id() {
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Should be valid JSON");
     assert_eq!(json["hasId"], true);
 }
@@ -142,7 +157,12 @@ async fn respond(handler: &str) -> serde_json::Value {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
 
     serde_json::from_slice(&body).expect("Should be valid JSON")
 }

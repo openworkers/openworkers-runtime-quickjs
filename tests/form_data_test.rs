@@ -26,7 +26,12 @@ async fn post(script: &str, content_type: &str, body: &str) -> String {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let bytes = response.body.collect().await.unwrap_or_default();
+    let bytes = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .unwrap_or_default();
 
     String::from_utf8(bytes.to_vec()).expect("Body should be UTF-8")
 }

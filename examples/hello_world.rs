@@ -29,7 +29,12 @@ async fn main() {
     worker.exec(task).await.expect("task should execute");
 
     let response = rx.await.expect("worker should respond");
-    let body = response.body.collect().await.unwrap_or_default();
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .unwrap_or_default();
 
     println!("status: {}", response.status);
     println!("headers: {:?}", response.headers);

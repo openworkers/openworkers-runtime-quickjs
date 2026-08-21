@@ -21,7 +21,12 @@ async fn respond_json(script: &str) -> serde_json::Value {
     let response = rx.await.expect("Should receive response");
     assert_eq!(response.status, 200);
 
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
 
     serde_json::from_slice(&body).expect("Should be valid JSON")
 }

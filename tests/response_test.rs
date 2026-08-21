@@ -25,7 +25,13 @@ async fn respond_with(body: &str) -> Vec<u8> {
 
     let response = rx.await.expect("Should receive response");
 
-    response.body.collect().await.unwrap_or_default().to_vec()
+    response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .unwrap_or_default()
+        .to_vec()
 }
 
 #[tokio::test]
@@ -89,7 +95,12 @@ async fn test_array_buffer_keeps_the_bounds_of_a_view() {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
 
     assert_eq!(body, [2, 3].as_slice());
 }

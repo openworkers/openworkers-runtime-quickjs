@@ -1,6 +1,6 @@
 [package]
 name = "openworkers-runtime-quickjs"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 
 [features]
@@ -10,7 +10,7 @@ actix = ["openworkers-core/actix"]
 
 # Common types
 # openworkers-core = { path = "../openworkers-core" }
-openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.14.0" }
+openworkers-core = { git = "https://github.com/openworkers/openworkers-core", tag = "v0.15.0" }
 
 # QuickJS JavaScript engine
 rquickjs = { version = "0.10", features = ["full-async", "parallel"] }

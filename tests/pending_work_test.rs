@@ -18,7 +18,13 @@ async fn call(worker: &mut Worker, path: &str) -> Vec<u8> {
 
     let response = rx.await.expect("Should receive response");
 
-    response.body.collect().await.unwrap_or_default().to_vec()
+    response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .unwrap_or_default()
+        .to_vec()
 }
 
 #[tokio::test]

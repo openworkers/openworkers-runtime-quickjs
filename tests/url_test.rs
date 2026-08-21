@@ -24,7 +24,12 @@ async fn eval(expr: &str) -> serde_json::Value {
     worker.exec(task).await.expect("Task should execute");
 
     let response = rx.await.expect("Should receive response");
-    let body = response.body.collect().await.expect("Should have body");
+    let body = response
+        .body
+        .collect()
+        .await
+        .expect("Should read body")
+        .expect("Should have body");
 
     serde_json::from_slice(&body).expect("Should be valid JSON")
 }
