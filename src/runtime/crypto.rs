@@ -1,6 +1,8 @@
 use ring::{digest, rand};
 use rquickjs::{Ctx, Function, Object, Result};
 
+use super::typed_array_bytes;
+
 /// Setup the `crypto` global
 pub fn setup_crypto(ctx: &Ctx<'_>) -> Result<()> {
     let globals = ctx.globals();
@@ -8,7 +10,7 @@ pub fn setup_crypto(ctx: &Ctx<'_>) -> Result<()> {
     let crypto = Object::new(ctx.clone())?;
 
     let get_random_values = Function::new(ctx.clone(), |array: rquickjs::TypedArray<'_, u8>| {
-        let Some(data) = array.as_bytes() else {
+        let Some(raw) = array.as_raw() else {
             return Err(rquickjs::Error::new_from_js_message(
                 "object",
                 "Uint8Array",
@@ -16,7 +18,7 @@ pub fn setup_crypto(ctx: &Ctx<'_>) -> Result<()> {
             ));
         };
 
-        let len = data.len();
+        let len = raw.len();
         let mut bytes = vec![0u8; len];
 
         // Throw rather than leave the caller with a buffer we did not randomize
@@ -24,9 +26,9 @@ pub fn setup_crypto(ctx: &Ctx<'_>) -> Result<()> {
             rquickjs::Error::new_from_js_message("object", "Uint8Array", "System RNG failed")
         })?;
 
-        let raw = array.as_raw().unwrap();
+        // SAFETY: the buffer was live at as_raw() and no JavaScript has run since
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), raw.ptr.as_ptr(), len);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), raw.cast::<u8>().as_ptr(), len);
         }
 
         Ok::<_, rquickjs::Error>(())
@@ -44,7 +46,7 @@ pub fn setup_crypto(ctx: &Ctx<'_>) -> Result<()> {
     let native_digest = Function::new(
         ctx.clone(),
         |algo: String, data: rquickjs::TypedArray<'_, u8>| {
-            let bytes = data.as_bytes().unwrap_or(&[]);
+            let bytes = typed_array_bytes(&data).unwrap_or(&[]);
 
             let algorithm = match algo.to_uppercase().as_str() {
                 "SHA-1" => &digest::SHA1_FOR_LEGACY_USE_ONLY,

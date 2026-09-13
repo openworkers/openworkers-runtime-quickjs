@@ -5,12 +5,14 @@ use openworkers_core::{
 };
 use rquickjs::{
     Array, AsyncContext, AsyncRuntime, Ctx, Function, IntoJs, Object, TypedArray, Value,
-    async_with, prelude::Async, promise::Promise,
+    prelude::Async, promise::Promise,
 };
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::runtime::typed_array_bytes;
 
 const RESPONSE_STREAM_BUFFER_SIZE: usize = 16;
 
@@ -1112,7 +1114,7 @@ async fn do_fetch(ops: OperationsHandle, options_json: String, body: Option<Byte
 /// Bytes of a non-streaming response body, which JS holds as a string or a Uint8Array
 fn buffered_body(response: &Object<'_>) -> Option<Bytes> {
     if let Ok(view) = response.get::<_, TypedArray<u8>>("_body") {
-        return view.as_bytes().map(Bytes::copy_from_slice);
+        return typed_array_bytes(&view).map(Bytes::copy_from_slice);
     }
 
     response.get::<_, String>("_body").ok().map(Bytes::from)
@@ -1147,78 +1149,161 @@ impl Worker {
         let ops_fetch = ops.clone();
 
         // Initialize runtime bindings and evaluate script
-        async_with!(context => |ctx| {
-            // Setup native console functions that wire to OperationsHandle
-            let global = ctx.globals();
+        context
+            .async_with(async |ctx| {
+                // Setup native console functions that wire to OperationsHandle
+                let global = ctx.globals();
 
-            let log_fn = Function::new(ctx.clone(), move |msg: String| {
-                ops_log.handle_log(LogLevel::Log, msg);
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.log: {}", e)))?;
-            global.set("__console_log", log_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_log: {}", e)))?;
+                let log_fn = Function::new(ctx.clone(), move |msg: String| {
+                    ops_log.handle_log(LogLevel::Log, msg);
+                })
+                .map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to create console.log: {}",
+                        e
+                    ))
+                })?;
+                global.set("__console_log", log_fn).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to set __console_log: {}",
+                        e
+                    ))
+                })?;
 
-            let warn_fn = Function::new(ctx.clone(), move |msg: String| {
-                ops_warn.handle_log(LogLevel::Warn, msg);
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.warn: {}", e)))?;
-            global.set("__console_warn", warn_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_warn: {}", e)))?;
+                let warn_fn = Function::new(ctx.clone(), move |msg: String| {
+                    ops_warn.handle_log(LogLevel::Warn, msg);
+                })
+                .map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to create console.warn: {}",
+                        e
+                    ))
+                })?;
+                global.set("__console_warn", warn_fn).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to set __console_warn: {}",
+                        e
+                    ))
+                })?;
 
-            let error_fn = Function::new(ctx.clone(), move |msg: String| {
-                ops_error.handle_log(LogLevel::Error, msg);
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.error: {}", e)))?;
-            global.set("__console_error", error_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_error: {}", e)))?;
+                let error_fn = Function::new(ctx.clone(), move |msg: String| {
+                    ops_error.handle_log(LogLevel::Error, msg);
+                })
+                .map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to create console.error: {}",
+                        e
+                    ))
+                })?;
+                global.set("__console_error", error_fn).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to set __console_error: {}",
+                        e
+                    ))
+                })?;
 
-            let info_fn = Function::new(ctx.clone(), move |msg: String| {
-                ops_info.handle_log(LogLevel::Info, msg);
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.info: {}", e)))?;
-            global.set("__console_info", info_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_info: {}", e)))?;
+                let info_fn = Function::new(ctx.clone(), move |msg: String| {
+                    ops_info.handle_log(LogLevel::Info, msg);
+                })
+                .map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to create console.info: {}",
+                        e
+                    ))
+                })?;
+                global.set("__console_info", info_fn).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to set __console_info: {}",
+                        e
+                    ))
+                })?;
 
-            let debug_fn = Function::new(ctx.clone(), move |msg: String| {
-                ops_debug.handle_log(LogLevel::Debug, msg);
-            }).map_err(|e| TerminationReason::InitializationError(format!("Failed to create console.debug: {}", e)))?;
-            global.set("__console_debug", debug_fn).map_err(|e| TerminationReason::InitializationError(format!("Failed to set __console_debug: {}", e)))?;
+                let debug_fn = Function::new(ctx.clone(), move |msg: String| {
+                    ops_debug.handle_log(LogLevel::Debug, msg);
+                })
+                .map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to create console.debug: {}",
+                        e
+                    ))
+                })?;
+                global.set("__console_debug", debug_fn).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to set __console_debug: {}",
+                        e
+                    ))
+                })?;
 
-            // Setup native fetch function that uses OperationsHandle
-            let fetch_fn = Function::new(ctx.clone(), Async(move |options_json: String, body: Option<TypedArray<'_, u8>>| {
-                let ops = ops_fetch.clone();
-                let body = body.and_then(|view| view.as_bytes().map(Bytes::copy_from_slice));
-                async move {
-                    do_fetch(ops, options_json, body).await
-                }
-            }))
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to create fetch function: {}", e)))?;
-            global.set("__native_fetch", fetch_fn)
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to set __native_fetch: {}", e)))?;
-
-            crate::runtime::setup_crypto(&ctx)
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup crypto: {}", e)))?;
-
-            crate::runtime::setup_url(&ctx)
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup URL: {}", e)))?;
-
-            crate::runtime::setup_base64(&ctx)
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup base64: {}", e)))?;
-
-            crate::runtime::setup_timers(&ctx)
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup timers: {}", e)))?;
-
-            crate::runtime::setup_text(&ctx)
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to setup text encoding: {}", e)))?;
-
-            // Evaluate runtime bindings
-            ctx.eval::<(), _>(RUNTIME_JS)
-                .map_err(|e| TerminationReason::InitializationError(format!("Failed to evaluate runtime JS: {}", e)))?;
-
-            // Evaluate user script
-            let js_code = script.code.as_js().ok_or_else(|| {
-                TerminationReason::InitializationError(
-                    "QuickJS runtime only supports JavaScript code".to_string(),
+                // Setup native fetch function that uses OperationsHandle
+                let fetch_fn = Function::new(
+                    ctx.clone(),
+                    Async(
+                        move |options_json: String, body: Option<TypedArray<'_, u8>>| {
+                            let ops = ops_fetch.clone();
+                            let body = body.and_then(|view| {
+                                typed_array_bytes(&view).map(Bytes::copy_from_slice)
+                            });
+                            async move { do_fetch(ops, options_json, body).await }
+                        },
+                    ),
                 )
-            })?;
-            ctx.eval::<(), _>(js_code)
-                .map_err(|e| TerminationReason::Exception(format!("Script evaluation failed: {}", e)))?;
+                .map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to create fetch function: {}",
+                        e
+                    ))
+                })?;
+                global.set("__native_fetch", fetch_fn).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to set __native_fetch: {}",
+                        e
+                    ))
+                })?;
 
-            Ok::<(), TerminationReason>(())
-        })
-        .await?;
+                crate::runtime::setup_crypto(&ctx).map_err(|e| {
+                    TerminationReason::InitializationError(format!("Failed to setup crypto: {}", e))
+                })?;
+
+                crate::runtime::setup_url(&ctx).map_err(|e| {
+                    TerminationReason::InitializationError(format!("Failed to setup URL: {}", e))
+                })?;
+
+                crate::runtime::setup_base64(&ctx).map_err(|e| {
+                    TerminationReason::InitializationError(format!("Failed to setup base64: {}", e))
+                })?;
+
+                crate::runtime::setup_timers(&ctx).map_err(|e| {
+                    TerminationReason::InitializationError(format!("Failed to setup timers: {}", e))
+                })?;
+
+                crate::runtime::setup_text(&ctx).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to setup text encoding: {}",
+                        e
+                    ))
+                })?;
+
+                // Evaluate runtime bindings
+                ctx.eval::<(), _>(RUNTIME_JS).map_err(|e| {
+                    TerminationReason::InitializationError(format!(
+                        "Failed to evaluate runtime JS: {}",
+                        e
+                    ))
+                })?;
+
+                // Evaluate user script
+                let js_code = script.code.as_js().ok_or_else(|| {
+                    TerminationReason::InitializationError(
+                        "QuickJS runtime only supports JavaScript code".to_string(),
+                    )
+                })?;
+                ctx.eval::<(), _>(js_code).map_err(|e| {
+                    TerminationReason::Exception(format!("Script evaluation failed: {}", e))
+                })?;
+
+                Ok::<(), TerminationReason>(())
+            })
+            .await?;
 
         Ok(Self {
             context,
@@ -1290,85 +1375,106 @@ impl Worker {
     ///
     /// The result is already on its way out, so this runs after it rather than delaying it.
     async fn drain_pending_work(&self) -> Result<(), TerminationReason> {
-        async_with!(self.context => |ctx| {
-            let promise: Promise = ctx.eval(b"__drainPendingWork()")
-                .map_err(|e| TerminationReason::Exception(format!("Failed to drain pending work: {}", e)))?;
+        self.context
+            .async_with(async |ctx| {
+                let promise: Promise = ctx.eval(b"__drainPendingWork()").map_err(|e| {
+                    TerminationReason::Exception(format!("Failed to drain pending work: {}", e))
+                })?;
 
-            promise.into_future::<()>().await
-                .map_err(|e| TerminationReason::Exception(format!("Pending work failed: {}", e)))
-        })
-        .await
+                promise.into_future::<()>().await.map_err(|e| {
+                    TerminationReason::Exception(format!("Pending work failed: {}", e))
+                })
+            })
+            .await
     }
 
     /// Handle a fetch event
     async fn handle_fetch(&self, request: HttpRequest) -> Result<HttpResponse, TerminationReason> {
-        async_with!(self.context => |ctx| {
-            let body = match &request.body {
-                RequestBody::Bytes(b) => Some(b.clone()),
-                RequestBody::None => None,
-                RequestBody::Stream(_) => {
-                    return Err(TerminationReason::Other(
-                        "Streaming request bodies are not supported".to_string(),
-                    ));
+        self.context
+            .async_with(async |ctx| {
+                let body = match &request.body {
+                    RequestBody::Bytes(b) => Some(b.clone()),
+                    RequestBody::None => None,
+                    RequestBody::Stream(_) => {
+                        return Err(TerminationReason::Other(
+                            "Streaming request bodies are not supported".to_string(),
+                        ));
+                    }
+                };
+
+                let init_json = serde_json::json!({
+                    "method": request.method.to_string(),
+                    "url": request.url,
+                    "headers": request.headers,
+                });
+
+                let init = ctx.json_parse(init_json.to_string()).map_err(|e| {
+                    TerminationReason::Exception(format!("Failed to build request init: {}", e))
+                })?;
+
+                // A typed array rather than a string, or a non-UTF-8 body would be mangled
+                let body = body
+                    .map(|bytes| TypedArray::new(ctx.clone(), bytes.to_vec()))
+                    .transpose()
+                    .map_err(|e| {
+                        TerminationReason::Exception(format!("Failed to build request body: {}", e))
+                    })?;
+
+                let dispatch: Function = ctx.globals().get("__dispatchFetch").map_err(|e| {
+                    TerminationReason::Exception(format!("Failed to get __dispatchFetch: {}", e))
+                })?;
+
+                // Dispatch and get response
+                let promise: Promise = dispatch.call((init, body)).map_err(|e| {
+                    TerminationReason::Exception(format!("Failed to dispatch fetch: {}", e))
+                })?;
+
+                let response: Object = promise.into_future().await.map_err(|e| {
+                    TerminationReason::Exception(format!("Fetch handler failed: {}", e))
+                })?;
+
+                // Extract response properties
+                let status: i32 = response.get("status").map_err(|e| {
+                    TerminationReason::Exception(format!("Failed to get status: {}", e))
+                })?;
+
+                let mut headers: Vec<(String, String)> = Vec::new();
+                if let Ok(headers_obj) = response.get::<_, Object>("headers") {
+                    let entries = headers_obj
+                        .get::<_, Vec<Array>>("_list")
+                        .unwrap_or_default();
+
+                    for entry in entries {
+                        let (Ok(name), Ok(value)) =
+                            (entry.get::<String>(0), entry.get::<String>(1))
+                        else {
+                            continue;
+                        };
+
+                        headers.push((name, value));
+                    }
                 }
-            };
 
-            let init_json = serde_json::json!({
-                "method": request.method.to_string(),
-                "url": request.url,
-                "headers": request.headers,
-            });
+                // Check if response is a stream
+                let is_stream: bool = response.get("_isStream").unwrap_or(false);
 
-            let init = ctx.json_parse(init_json.to_string())
-                .map_err(|e| TerminationReason::Exception(format!("Failed to build request init: {}", e)))?;
+                let body = if is_stream {
+                    // Collect all chunks first (QuickJS context is not Send)
+                    let mut chunks: Vec<Vec<u8>> = Vec::new();
 
-            // A typed array rather than a string, or a non-UTF-8 body would be mangled
-            let body = body
-                .map(|bytes| TypedArray::new(ctx.clone(), bytes.to_vec()))
-                .transpose()
-                .map_err(|e| TerminationReason::Exception(format!("Failed to build request body: {}", e)))?;
+                    // Set the response on globalThis temporarily for the helper to access
+                    let global = ctx.globals();
+                    global
+                        .set("__streamResponse", response.clone())
+                        .map_err(|e| {
+                            TerminationReason::Exception(format!(
+                                "Failed to set __streamResponse: {}",
+                                e
+                            ))
+                        })?;
 
-            let dispatch: Function = ctx.globals().get("__dispatchFetch")
-                .map_err(|e| TerminationReason::Exception(format!("Failed to get __dispatchFetch: {}", e)))?;
-
-            // Dispatch and get response
-            let promise: Promise = dispatch.call((init, body))
-                .map_err(|e| TerminationReason::Exception(format!("Failed to dispatch fetch: {}", e)))?;
-
-            let response: Object = promise.into_future().await
-                .map_err(|e| TerminationReason::Exception(format!("Fetch handler failed: {}", e)))?;
-
-            // Extract response properties
-            let status: i32 = response.get("status")
-                .map_err(|e| TerminationReason::Exception(format!("Failed to get status: {}", e)))?;
-
-            let mut headers: Vec<(String, String)> = Vec::new();
-            if let Ok(headers_obj) = response.get::<_, Object>("headers") {
-                let entries = headers_obj.get::<_, Vec<Array>>("_list").unwrap_or_default();
-
-                for entry in entries {
-                    let (Ok(name), Ok(value)) = (entry.get::<String>(0), entry.get::<String>(1)) else {
-                        continue;
-                    };
-
-                    headers.push((name, value));
-                }
-            }
-
-            // Check if response is a stream
-            let is_stream: bool = response.get("_isStream").unwrap_or(false);
-
-            let body = if is_stream {
-                // Collect all chunks first (QuickJS context is not Send)
-                let mut chunks: Vec<Vec<u8>> = Vec::new();
-
-                // Set the response on globalThis temporarily for the helper to access
-                let global = ctx.globals();
-                global.set("__streamResponse", response.clone())
-                    .map_err(|e| TerminationReason::Exception(format!("Failed to set __streamResponse: {}", e)))?;
-
-                // Read chunks one by one
-                let read_chunk_code = r#"
+                    // Read chunks one by one
+                    let read_chunk_code = r#"
                     (async () => {
                         if (!globalThis.__streamReader) {
                             const stream = __streamResponse._body;
@@ -1383,80 +1489,92 @@ impl Worker {
                     })()
                 "#;
 
-                // Read all chunks into memory
-                loop {
-                    let read_promise: Promise = ctx.eval(read_chunk_code.as_bytes())
-                        .map_err(|e| TerminationReason::Exception(format!("Failed to eval chunk read: {}", e)))?;
-                    let result: Object = read_promise.into_future().await
-                        .map_err(|e| TerminationReason::Exception(format!("Failed to read chunk: {}", e)))?;
+                    // Read all chunks into memory
+                    loop {
+                        let read_promise: Promise =
+                            ctx.eval(read_chunk_code.as_bytes()).map_err(|e| {
+                                TerminationReason::Exception(format!(
+                                    "Failed to eval chunk read: {}",
+                                    e
+                                ))
+                            })?;
+                        let result: Object = read_promise.into_future().await.map_err(|e| {
+                            TerminationReason::Exception(format!("Failed to read chunk: {}", e))
+                        })?;
 
-                    let done: bool = result.get("done").unwrap_or(true);
-                    if done {
-                        break;
-                    }
+                        let done: bool = result.get("done").unwrap_or(true);
+                        if done {
+                            break;
+                        }
 
-                    // Get value (Uint8Array)
-                    if let Ok(value) = result.get::<_, TypedArray<u8>>("value") {
-                        let chunk_data: Vec<u8> = value.as_bytes().unwrap_or(&[]).to_vec();
-                        chunks.push(chunk_data);
-                    }
-                }
-
-                // Clean up JS state
-                global.remove("__streamResponse").ok();
-                global.remove("__streamReader").ok();
-
-                // Create channel and spawn task to send chunks
-                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, String>>(RESPONSE_STREAM_BUFFER_SIZE);
-
-                tokio::spawn(async move {
-                    for chunk in chunks {
-                        if tx.send(Ok(Bytes::from(chunk))).await.is_err() {
-                            break; // Receiver dropped
+                        // Get value (Uint8Array)
+                        if let Ok(value) = result.get::<_, TypedArray<u8>>("value") {
+                            let chunk_data: Vec<u8> =
+                                typed_array_bytes(&value).unwrap_or(&[]).to_vec();
+                            chunks.push(chunk_data);
                         }
                     }
-                    // tx drops here, closing the channel
-                });
 
-                ResponseBody::Stream(rx)
-            } else if let Some(body_bytes) = buffered_body(&response) {
-                // Convert buffered body to stream for consistency
-                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, String>>(1);
+                    // Clean up JS state
+                    global.remove("__streamResponse").ok();
+                    global.remove("__streamReader").ok();
 
-                tokio::spawn(async move {
-                    let _ = tx.send(Ok(body_bytes)).await;
-                    // tx drops here, closing the channel
-                });
+                    // Create channel and spawn task to send chunks
+                    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, String>>(
+                        RESPONSE_STREAM_BUFFER_SIZE,
+                    );
 
-                ResponseBody::Stream(rx)
-            } else {
-                ResponseBody::None
-            };
+                    tokio::spawn(async move {
+                        for chunk in chunks {
+                            if tx.send(Ok(Bytes::from(chunk))).await.is_err() {
+                                break; // Receiver dropped
+                            }
+                        }
+                        // tx drops here, closing the channel
+                    });
 
-            Ok(HttpResponse {
-                status: status as u16,
-                headers,
-                body,
+                    ResponseBody::Stream(rx)
+                } else if let Some(body_bytes) = buffered_body(&response) {
+                    // Convert buffered body to stream for consistency
+                    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, String>>(1);
+
+                    tokio::spawn(async move {
+                        let _ = tx.send(Ok(body_bytes)).await;
+                        // tx drops here, closing the channel
+                    });
+
+                    ResponseBody::Stream(rx)
+                } else {
+                    ResponseBody::None
+                };
+
+                Ok(HttpResponse {
+                    status: status as u16,
+                    headers,
+                    body,
+                })
             })
-        })
-        .await
+            .await
     }
 
     /// Handle a scheduled event
     async fn handle_scheduled(&self, time: u64) -> Result<(), TerminationReason> {
-        async_with!(self.context => |ctx| {
-            let dispatch_code = format!(r#"__dispatchScheduled({})"#, time);
+        self.context
+            .async_with(async |ctx| {
+                let dispatch_code = format!(r#"__dispatchScheduled({})"#, time);
 
-            // Dispatch and await the scheduled event
-            let promise: Promise = ctx.eval(dispatch_code.as_bytes())
-                .map_err(|e| TerminationReason::Exception(format!("Failed to dispatch scheduled: {}", e)))?;
+                // Dispatch and await the scheduled event
+                let promise: Promise = ctx.eval(dispatch_code.as_bytes()).map_err(|e| {
+                    TerminationReason::Exception(format!("Failed to dispatch scheduled: {}", e))
+                })?;
 
-            let _result: Object = promise.into_future().await
-                .map_err(|e| TerminationReason::Exception(format!("Scheduled handler failed: {}", e)))?;
+                let _result: Object = promise.into_future().await.map_err(|e| {
+                    TerminationReason::Exception(format!("Scheduled handler failed: {}", e))
+                })?;
 
-            Ok(())
-        })
-        .await
+                Ok(())
+            })
+            .await
     }
 }
 

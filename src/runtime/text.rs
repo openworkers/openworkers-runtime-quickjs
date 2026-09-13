@@ -1,5 +1,7 @@
 use rquickjs::{Ctx, Function, Result, TypedArray};
 
+use super::typed_array_bytes;
+
 /// Length of the trailing bytes that could still grow into a valid sequence
 fn incomplete_tail(bytes: &[u8]) -> usize {
     for back in 1..=3.min(bytes.len()) {
@@ -29,7 +31,7 @@ pub fn setup_text(ctx: &Ctx<'_>) -> Result<()> {
 
     // Undefined when fatal decoding hits invalid UTF-8
     fn decode(view: TypedArray<'_, u8>, fatal: bool) -> Option<String> {
-        let bytes = view.as_bytes().unwrap_or(&[]);
+        let bytes = typed_array_bytes(&view).unwrap_or(&[]);
 
         match fatal {
             true => String::from_utf8(bytes.to_vec()).ok(),
@@ -39,7 +41,7 @@ pub fn setup_text(ctx: &Ctx<'_>) -> Result<()> {
     globals.set("__text_decode", Function::new(ctx.clone(), decode)?)?;
 
     fn tail(view: TypedArray<'_, u8>) -> usize {
-        incomplete_tail(view.as_bytes().unwrap_or(&[]))
+        incomplete_tail(typed_array_bytes(&view).unwrap_or(&[]))
     }
     globals.set("__text_tail", Function::new(ctx.clone(), tail)?)?;
 
